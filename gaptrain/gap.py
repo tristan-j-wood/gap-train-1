@@ -208,6 +208,7 @@ class GAP:
         """
 
         self.name = name
+        self.system = system
 
         if system is not None and default_params:
             self.params = Parameters(atom_symbols=system.atom_symbols())
@@ -315,6 +316,43 @@ class SolventIntraGAP(IntraGAP):
 
 class SoluteIntraGAP(IntraGAP):
     pass
+
+
+class UmbrellaGAP(GAP):
+
+    def ase_gap_potential_str(self):
+        """Generate the quippy/ASE string to run the potential"""
+
+        if not os.path.exists(f'{self.name}.xml'):
+            raise IOError(f'GAP parameter file ({self.name}.xml) did not exist')
+
+        # Custom calculator for the umbrella sampling energies and forces
+        here = os.path.abspath(os.path.dirname(__file__))
+        pt = open(os.path.join(here, 'umbrella.py'), 'r').readlines()
+
+        pt += [f'gap_pot = {potential_class}("IP GAP", '
+               f'param_filename="{self.name}.xml")\n',
+               f'pot = GAPUmbrellaCalculator(gap_calc=gap_pot,'
+               f'coordinate={self.coordinate},'
+               f'bias_strength={self.bias_strength},'
+               f'reference={self.reference})\n']
+
+        return ''.join(pt)
+
+    def __init__(self, name, system, coordinate, bias_strength, reference):
+        """An umbrella sampling GAP, which uses the GAPUmbrella calculator.
+        Must be initialised with a system so the molecules are defined
+
+        :param name: (str)
+        :param system: (gt.system.System)
+        """
+        super().__init__(name, system)
+
+        self.coordinate = coordinate
+        self.bias_strength = bias_strength
+        self.reference = reference
+
+        logger.info(f'Initialised an umbrella-GAP')
 
 
 class Parameters:

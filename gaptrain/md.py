@@ -1,6 +1,7 @@
 import shutil
 from gaptrain.trajectories import Trajectory
 from gaptrain.calculators import DFTB
+from gaptrain.gap import UmbrellaGAP
 from gaptrain.utils import work_in_tmp_dir
 from gaptrain.log import logger
 from gaptrain.gtconfig import GTConfig
@@ -366,6 +367,207 @@ def run_gapmd(configuration, gap, temp, dt, interval, init_temp=None, **kwargs):
               'system.pbc = True',
               'system.center()',
               f'{gap.ase_gap_potential_str()}',
+              'system.set_calculator(pot)',
+              ase_momenta_string(configuration, init_temp, bbond_energy, fbond_energy),
+              'traj = Trajectory("tmp.traj", \'w\', system)\n',
+              'energy_file = open("tmp_energies.txt", "w")',
+              'def print_energy(atoms=system):',
+              '    energy_file.write(str(atoms.get_potential_energy())+"\\n")\n',
+              f'dyn = {dynamics_string()}',
+              f'dyn.attach(print_energy, interval={interval})',
+              f'dyn.attach(traj.write, interval={interval})',
+              f'dyn.run(steps={n_steps})',
+              'energy_file.close()',
+              sep='\n', file=quippy_script)
+
+    # Run the process
+    quip_md = Popen(GTConfig.quippy_gap_command + ['gap.py'],
+                    shell=False, stdout=PIPE, stderr=PIPE)
+    _, err = quip_md.communicate()
+
+    if len(err) > 0 and 'WARNING' not in err.decode():
+        logger.error(f'GAP MD: {err.decode()}')
+
+    traj = Trajectory('tmp.traj', init_configuration=configuration)
+
+    return traj
+
+
+def run_umbrella_dftbmd(configuration, temp, dt, interval, **kwargs):
+    """
+    Run ab-initio molecular dynamics on a system. To run a 10 ps simulation
+    with a timestep of 0.5 fs saving every 10th step at 300K
+
+    run_umbrellamd(config, temp=300, dt=0.5, interval=10, ps=10)
+
+    ---------------------------------------------------------------------------
+    :param configuration: (gaptrain.configurations.Configuration)
+
+    :param temp: (float) Temperature in K to use
+
+    :param dt: (float) Timestep in fs
+
+    :param interval: (int) Interval between printing the geometry
+
+    :param kwargs: {fs, ps, ns} Simulation time in some units
+    """
+    dftb_path = os.getenv('DFTB_COMMAND', shutil.which('dftb+'))
+    if dftb_path is None:
+        raise ValueError('Failed to run DFTB+. Executable not found ')
+
+    logger.info('Running Umbrella Sampling DFTB+ MD')
+    ase_atoms = configuration.ase_atoms()
+
+    if 'n_cores' in kwargs:
+        os.environ['OMP_NUM_THREADS'] = str(kwargs['n_cores'])
+    else:
+        os.environ['OMP_NUM_THREADS'] = str(GTConfig.n_cores)
+
+    umbrella = Umbrella(configuration=configuration, atoms=ase_atoms,
+                        kpts=(1, 1, 1),
+                        Hamiltonian_Charge=configuration.charge)
+    umbrella = UmbrellaCalculator(umbrella)
+    ase_atoms.set_calculator(umbrella)
+
+    # Do a single point energy evaluation to make sure the calculation works.
+    # also to generate the input file which can be modified
+    try:
+        ase_atoms.get_potential_energy()
+
+    except ValueError:
+        raise Exception('DFTB+ failed to calculate the first point')
+
+    # Need to add the DFTB ase calculator to run dynamics as currently the
+    # energy and forces are not modified.
+
+    # Append to the generated input file
+    with open('dftb_in.hsd', 'a') as input_file:
+
+        print('Driver = VelocityVerlet{',
+              f'  TimeStep [fs] = {dt}',
+              '  Thermostat = NoseHoover {',
+              f'    Temperature [Kelvin] = {temp}',
+              '    CouplingStrength [cm^-1] = 3200',
+              '  }',
+              f'  Steps = {simulation_steps(dt, kwargs)}',
+              '  MovedAtoms = 1:-1',
+              f'  MDRestartFrequency = {interval}',
+              '}', sep='\n', file=input_file)
+
+    with open('dftb_md.out', 'w') as output_file:
+        process = Popen([dftb_path],
+                        shell=False, stderr=PIPE, stdout=output_file)
+        _, err = process.communicate()
+
+    if len(err) > 0:
+        logger.error(f'DFTB MD: {err.decode()}')
+
+    return Trajectory('geo_end.xyz', init_configuration=configuration)
+
+
+@work_in_tmp_dir(copied_exts=['.xml'])
+def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
+                       coordinate=None, bias_strength=None, reference=None,
+                       **kwargs):
+    """
+    Run umbrella sampling molecular dynamics on a system using a GAP to
+    predict energies and forces
+
+    ---------------------------------------------------------------------------
+    :param configuration: (gaptrain.configurations.Configuration)
+
+    :param gap: (gaptrain.gap.GAP | gaptrain.gap.AdditiveGAP)
+
+    :param temp: (float) Temperature in K to initialise velocities and to run
+                 NVT MD, if temp=0 then will run NVE
+
+    :param init_temp: (float | None) Initial temperature to initialise momenta
+                      with. If None then will be set at temp
+
+    :param coordinate: (list | None) Indices of the atoms which define the
+                       reaction coordinate
+
+    :param bias_strength: (float | None) Value of the bias strength, K, used in
+                          umbrella sampling
+
+    :param reference: (float | None) Value of the reference value, ξ_i, used in
+                      umbrella sampling
+
+    :param dt: (float) Timestep in fs
+
+    :param interval: (int) Interval between printing the geometry
+
+    -------------------------------------------------
+    Keyword Arguments:
+
+        {fs, ps, ns}: Simulation time in some units
+
+        bbond_energy: (dict | None) Additional energy to add to a breaking
+                         bond. e.g. bbond_energy={(0, 1), 0.1} Adds 0.1 eV
+                         to the 'bond' between atoms 0 and 1 as velocities
+                         shared between the atoms in the breaking bond direction
+
+        :fbond_energy: (dict | None) As bbond_energy but in the direction to
+                         form a bond
+
+    :returns: (gt.Trajectory)
+    """
+    if configuration.box is None:
+        raise ValueError('To run periodic GAP MD a box must be defined '
+                         'for a configuration. i.e. '
+                         'config = gt.Configuration("filename.xyz", '
+                         'box=gt.Box([10, 10, 10])')
+
+    logger.info('Running GAP MD')
+    configuration.save(filename='config.xyz')
+
+    a, b, c = configuration.box.size
+    n_steps = simulation_steps(dt, kwargs)
+
+    if 'n_cores' in kwargs:
+        n_cores = kwargs['n_cores']
+    else:
+        n_cores = min(GTConfig.n_cores, 8)
+
+    fbond_energy = kwargs.get('fbond_energy', None)
+    bbond_energy = kwargs.get('bbond_energy', None)
+
+    os.environ['OMP_NUM_THREADS'] = str(n_cores)
+    logger.info(f'Using {n_cores} cores for GAP MD')
+
+    def dynamics_string():
+        if temp > 0:
+            # default to Langevin NVT
+            return f'Langevin(system, {dt:.1f} * units.fs, {temp} * units.kB, 0.02)'
+
+        # Otherwise velocity verlet NVE
+        return f'VelocityVerlet(system, {dt:.1f} * units.fs)'
+
+    if init_temp is None:
+        init_temp = temp
+
+    umbrella_gap = UmbrellaGAP(name=gap.name,
+                               system=gap.system,
+                               coordinate=coordinate,
+                               bias_strength=bias_strength,
+                               reference=reference)
+
+    # Print a Python script to execute quippy and use ASE to drive the dynamics
+    with open(f'gap.py', 'w') as quippy_script:
+        print('from __future__ import print_function',
+              'import quippy',
+              'import numpy as np',
+              'from ase.io import read, write',
+              'from ase.io.trajectory import Trajectory',
+              'from ase.md.velocitydistribution import MaxwellBoltzmannDistribution',
+              'from ase import units',
+              'from ase.md.langevin import Langevin',
+              'from ase.md.verlet import VelocityVerlet',
+              'system = read("config.xyz")',
+              f'system.cell = [{a}, {b}, {c}]',
+              'system.pbc = True',
+              'system.center()',
+              f'{umbrella_gap.ase_gap_potential_str()}',
               'system.set_calculator(pot)',
               ase_momenta_string(configuration, init_temp, bbond_energy, fbond_energy),
               'traj = Trajectory("tmp.traj", \'w\', system)\n',
