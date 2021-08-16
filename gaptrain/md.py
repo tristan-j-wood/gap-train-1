@@ -580,10 +580,8 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
               'def print_energy(atoms=system):',
               '    energy_file.write(str(atoms.get_potential_energy())+"\\n")\n',
               'rxn_coord_file = open("tmp_rxn_coord.txt", "w")',
-              'def print_rxn_coord(atoms=system):',
-              # Can't get ase to print from custom function yet so defaulting
-              # to get_potential_energy() function
-              '    rxn_coord_file.write(str(atoms.get_rxn_coords())+"\\n")\n',
+              'def print_rxn_coord(atoms=custom_atoms):',
+              '    rxn_coord_file.write(str(atoms.get_rxn_coords(coordinate))+"\\n")\n',
               f'dyn = {dynamics_string()}',
               f'dyn.attach(print_energy, interval={interval})',
               f'dyn.attach(print_rxn_coord, interval={interval})',

@@ -16,7 +16,6 @@ def _get_distance_derivative(atoms, indexes, reference):
     euclidean_distance = atoms.get_distance(indexes[0], indexes[1],
                                             mic=True)
 
-    logging.info(f'Distance: {euclidean_distance:.3f}')
     assert euclidean_distance > 0
 
     norm = 2 * (euclidean_distance - reference) / euclidean_distance
@@ -36,6 +35,20 @@ def _get_torsion_derivative(atoms, indexes, reference):
 def _get_rmsd_derivative(atoms, indexes, reference):
 
     return NotImplementedError
+
+
+class CustomAtoms(Atoms):
+
+    def get_rxn_coords(self, indexes):
+
+        euclidean_distance = self.atoms.get_distance(indexes[0], indexes[1],
+                                                     mic=True)
+
+        return euclidean_distance
+
+    def __init__(self, atoms=None):
+
+        self.atoms = atoms
 
 
 class DFTBUmbrellaCalculator(DFTB):
@@ -75,12 +88,6 @@ class GAPUmbrellaCalculator(Calculator):
         bias = -0.5 * self.bias_strength * coord_derivative
 
         return bias
-
-    def get_rxn_coord(self):
-
-        # Inherit atoms class with new functions?
-
-        return 1
 
     def get_potential_energy(self, atoms=None, force_consistent=False,
                              apply_constraint=True):
