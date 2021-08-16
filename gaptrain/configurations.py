@@ -402,6 +402,7 @@ class Configuration:
 
         self.forces = None                                  # eV Å-1
         self.energy = None                                  # eV
+        self.rxn_coord = None
 
         self.box = system.box if system is not None else box
         self.charge = system.charge if system is not None else charge

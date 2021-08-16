@@ -81,6 +81,17 @@ class Trajectory(gt.ConfigurationSet):
 
             os.remove('tmp_energies.txt')
 
+        # Set the reaction coordinate from the trajectory if possible
+        if os.path.exists('tmp_rxn_coord.txt'):
+            for i, line in enumerate(open('tmp_rxn_coord.txt', 'r')):
+                try:
+                    self[i].rxn_coord = float(line.split()[0])
+
+                except (TypeError, ValueError, IndexError):
+                    logger.warning('Could not set the reaction coordinate')
+
+            os.remove('tmp_rxn_coord.txt')
+
         return None
 
     def extract_from_gmx(self, filename, init_config):

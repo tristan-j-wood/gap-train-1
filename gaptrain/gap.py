@@ -333,13 +333,15 @@ class UmbrellaGAP(GAP):
         pt += [f'gap_pot = {potential_class}("IP GAP", '
                f'param_filename="{self.name}.xml")\n',
                f'pot = GAPUmbrellaCalculator(gap_calc=gap_pot,'
+               f'coord_type="{self.coord_type}",'
                f'coordinate={self.coordinate},'
                f'bias_strength={self.bias_strength},'
                f'reference={self.reference})\n']
 
         return ''.join(pt)
 
-    def __init__(self, name, system, coordinate, bias_strength, reference):
+    def __init__(self, name, system, coord_type, coordinate, bias_strength,
+                 reference):
         """An umbrella sampling GAP, which uses the GAPUmbrella calculator.
         Must be initialised with a system so the molecules are defined
 
@@ -348,6 +350,7 @@ class UmbrellaGAP(GAP):
         """
         super().__init__(name, system)
 
+        self.coord_type = coord_type
         self.coordinate = coordinate
         self.bias_strength = bias_strength
         self.reference = reference

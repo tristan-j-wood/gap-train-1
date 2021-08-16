@@ -1,5 +1,7 @@
 from ase.calculators.calculator import Calculator
 from gaptrain.calculators import DFTB
+from ase.atoms import Atoms
+import logging
 import numpy as np
 
 
@@ -13,6 +15,8 @@ def _get_distance_derivative(atoms, indexes, reference):
 
     euclidean_distance = atoms.get_distance(indexes[0], indexes[1],
                                             mic=True)
+
+    logging.info(f'Distance: {euclidean_distance:.3f}')
     assert euclidean_distance > 0
 
     norm = 2 * (euclidean_distance - reference) / euclidean_distance
@@ -54,7 +58,7 @@ class DFTBUmbrellaCalculator(DFTB):
 
 class GAPUmbrellaCalculator(Calculator):
 
-    implemented_properties = ["energy", "forces"]
+    implemented_properties = ["rnx_coord", "energy", "forces"]
 
     def _calculate_bias(self, atoms):
 
@@ -71,6 +75,12 @@ class GAPUmbrellaCalculator(Calculator):
         bias = -0.5 * self.bias_strength * coord_derivative
 
         return bias
+
+    def get_rxn_coord(self):
+
+        # Inherit atoms class with new functions?
+
+        return 1
 
     def get_potential_energy(self, atoms=None, force_consistent=False,
                              apply_constraint=True):
@@ -98,13 +108,13 @@ class GAPUmbrellaCalculator(Calculator):
         Calculator.__init__(self, restart=None,
                             label=None, atoms=None, **kwargs)
 
-        assert coord_type in ['distance, rmsd', 'torsion']
-        assert coordinate is not None
-        assert bias_strength is not None
-        assert reference is not None
-
         self.calculator = gap_calc
         self.coord_type = coord_type
         self.coordinate = coordinate
         self.bias_strength = bias_strength
         self.reference = reference
+
+        assert coord_type in ['distance', 'rmsd', 'torsion']
+        assert coordinate is not None
+        assert bias_strength is not None
+        assert reference is not None

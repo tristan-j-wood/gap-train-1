@@ -467,8 +467,8 @@ def run_umbrella_dftbmd(configuration, temp, dt, interval, **kwargs):
 
 @work_in_tmp_dir(copied_exts=['.xml'])
 def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
-                       coordinate=None, bias_strength=None, reference=None,
-                       **kwargs):
+                       coord_type=None, coordinate=None, bias_strength=None,
+                       reference=None, **kwargs):
     """
     Run umbrella sampling molecular dynamics on a system using a GAP to
     predict energies and forces
@@ -483,6 +483,9 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
 
     :param init_temp: (float | None) Initial temperature to initialise momenta
                       with. If None then will be set at temp
+
+    :param coord_type: (str | None) Type of coordinate to perform bias along.
+                       Must be in the list ['distance', 'rmsd', 'torsion']
 
     :param coordinate: (list | None) Indices of the atoms which define the
                        reaction coordinate
@@ -548,6 +551,7 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
 
     umbrella_gap = UmbrellaGAP(name=gap.name,
                                system=gap.system,
+                               coord_type=coord_type,
                                coordinate=coordinate,
                                bias_strength=bias_strength,
                                reference=reference)
@@ -569,13 +573,20 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
               'system.center()',
               f'{umbrella_gap.ase_gap_potential_str()}',
               'system.set_calculator(pot)',
-              ase_momenta_string(configuration, init_temp, bbond_energy, fbond_energy),
+              ase_momenta_string(configuration, init_temp, bbond_energy,
+                                 fbond_energy),
               'traj = Trajectory("tmp.traj", \'w\', system)\n',
               'energy_file = open("tmp_energies.txt", "w")',
               'def print_energy(atoms=system):',
               '    energy_file.write(str(atoms.get_potential_energy())+"\\n")\n',
+              'rxn_coord_file = open("tmp_rxn_coord.txt", "w")',
+              'def print_rxn_coord(atoms=system):',
+              # Can't get ase to print from custom function yet so defaulting
+              # to get_potential_energy() function
+              '    rxn_coord_file.write(str(atoms.get_rxn_coords())+"\\n")\n',
               f'dyn = {dynamics_string()}',
               f'dyn.attach(print_energy, interval={interval})',
+              f'dyn.attach(print_rxn_coord, interval={interval})',
               f'dyn.attach(traj.write, interval={interval})',
               f'dyn.run(steps={n_steps})',
               'energy_file.close()',
@@ -587,7 +598,7 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
     _, err = quip_md.communicate()
 
     if len(err) > 0 and 'WARNING' not in err.decode():
-        logger.error(f'GAP MD: {err.decode()}')
+        logger.error(f'GAP Umbrella Sampling MD: {err.decode()}')
 
     traj = Trajectory('tmp.traj', init_configuration=configuration)
 
