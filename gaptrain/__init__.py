@@ -12,6 +12,7 @@ from gaptrain import cur
 from gaptrain import active
 from gaptrain import gap
 from gaptrain import solvents
+from gaptrain import umbrella
 from gaptrain.gap import GAP, IntraGAP, InterGAP, IIGAP
 
 __all__ = ['System',

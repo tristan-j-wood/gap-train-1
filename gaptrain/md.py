@@ -468,7 +468,8 @@ def run_umbrella_dftbmd(configuration, temp, dt, interval, **kwargs):
 @work_in_tmp_dir(copied_exts=['.xml'])
 def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
                        coord_type=None, coordinate=None, bias_strength=None,
-                       reference=None, **kwargs):
+                       reference=None, distance=None, pulling_rate=None,
+                       **kwargs):
     """
     Run umbrella sampling molecular dynamics on a system using a GAP to
     predict energies and forces
@@ -480,6 +481,10 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
 
     :param temp: (float) Temperature in K to initialise velocities and to run
                  NVT MD, if temp=0 then will run NVE
+
+    :param dt: (float) Timestep in fs
+
+    :param interval: (int) Interval between printing the geometry
 
     :param init_temp: (float | None) Initial temperature to initialise momenta
                       with. If None then will be set at temp
@@ -495,11 +500,6 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
 
     :param reference: (float | None) Value of the reference value, ξ_i, used in
                       umbrella sampling
-
-    :param dt: (float) Timestep in fs
-
-    :param interval: (int) Interval between printing the geometry
-
     -------------------------------------------------
     Keyword Arguments:
 
@@ -525,15 +525,20 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
     configuration.save(filename='config.xyz')
 
     a, b, c = configuration.box.size
-    n_steps = simulation_steps(dt, kwargs)
+
+    if 'ps' or 'ns' or 'fs' not in kwargs:
+        time = {'fs': distance / pulling_rate}
+        n_steps = simulation_steps(dt, time)
+    else:
+        n_steps = simulation_steps(dt, kwargs)
 
     if 'n_cores' in kwargs:
         n_cores = kwargs['n_cores']
     else:
         n_cores = min(GTConfig.n_cores, 8)
 
-    fbond_energy = kwargs.get('fbond_energy', None)
-    bbond_energy = kwargs.get('bbond_energy', None)
+    # fbond_energy = kwargs.get('fbond_energy', None)
+    # bbond_energy = kwargs.get('bbond_energy', None)
 
     os.environ['OMP_NUM_THREADS'] = str(n_cores)
     logger.info(f'Using {n_cores} cores for GAP MD')
@@ -546,8 +551,8 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
         # Otherwise velocity verlet NVE
         return f'VelocityVerlet(system, {dt:.1f} * units.fs)'
 
-    if init_temp is None:
-        init_temp = temp
+    # if init_temp is None:
+    #     init_temp = temp
 
     umbrella_gap = UmbrellaGAP(name=gap.name,
                                system=gap.system,
@@ -573,8 +578,8 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
               'system.center()',
               f'{umbrella_gap.ase_gap_potential_str()}',
               'system.set_calculator(pot)',
-              ase_momenta_string(configuration, init_temp, bbond_energy,
-                                 fbond_energy),
+              # ase_momenta_string(configuration, init_temp, bbond_energy,
+              #                    fbond_energy),
               'traj = Trajectory("tmp.traj", \'w\', system)\n',
               'energy_file = open("tmp_energies.txt", "w")',
               'def print_energy(atoms=system):',
@@ -582,10 +587,16 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
               'rxn_coord_file = open("tmp_rxn_coord.txt", "w")',
               'def print_rxn_coord(atoms=custom_atoms):',
               '    rxn_coord_file.write(str(atoms.get_rxn_coords(coordinate))+"\\n")\n',
+              f'def update_reference(pulling_rate={pulling_rate}):',
+              '    pot.reference += pulling_rate',
               f'dyn = {dynamics_string()}',
               f'dyn.attach(print_energy, interval={interval})',
               f'dyn.attach(print_rxn_coord, interval={interval})',
               f'dyn.attach(traj.write, interval={interval})',
+              # Need to add if statement to turn on pulling on during pulling
+              # simulation
+              # Also check the calculation for interval is correct (currently wrong)
+              f'dyn.attach(update_reference, interval={interval})',
               f'dyn.run(steps={n_steps})',
               'energy_file.close()',
               sep='\n', file=quippy_script)
