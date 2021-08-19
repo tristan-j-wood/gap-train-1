@@ -500,6 +500,12 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
 
     :param reference: (float | None) Value of the reference value, ξ_i, used in
                       umbrella sampling
+
+    :param distance: (float | None) Distance in Å to pull the system apart,
+                     starting from the reference value
+
+    :param pulling_rate: (float | None) Rate in Å /fs at which the pull the
+                         system apart. If None, no pulling will occur
     -------------------------------------------------
     Keyword Arguments:
 
@@ -526,7 +532,8 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
 
     a, b, c = configuration.box.size
 
-    if 'ps' or 'ns' or 'fs' not in kwargs:
+    # add check in case user has forgotten to add time when doing US windows
+    if ('ps' and 'ns' and 'fs') not in kwargs:
         time = {'fs': distance / pulling_rate}
         n_steps = simulation_steps(dt, time)
     else:
@@ -537,8 +544,8 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
     else:
         n_cores = min(GTConfig.n_cores, 8)
 
-    # fbond_energy = kwargs.get('fbond_energy', None)
-    # bbond_energy = kwargs.get('bbond_energy', None)
+    fbond_energy = kwargs.get('fbond_energy', None)
+    bbond_energy = kwargs.get('bbond_energy', None)
 
     os.environ['OMP_NUM_THREADS'] = str(n_cores)
     logger.info(f'Using {n_cores} cores for GAP MD')
@@ -551,8 +558,8 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
         # Otherwise velocity verlet NVE
         return f'VelocityVerlet(system, {dt:.1f} * units.fs)'
 
-    # if init_temp is None:
-    #     init_temp = temp
+    if init_temp is None:
+        init_temp = temp
 
     umbrella_gap = UmbrellaGAP(name=gap.name,
                                system=gap.system,
@@ -578,8 +585,8 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
               'system.center()',
               f'{umbrella_gap.ase_gap_potential_str()}',
               'system.set_calculator(pot)',
-              # ase_momenta_string(configuration, init_temp, bbond_energy,
-              #                    fbond_energy),
+              ase_momenta_string(configuration, init_temp, bbond_energy,
+                                 fbond_energy),
               'traj = Trajectory("tmp.traj", \'w\', system)\n',
               'energy_file = open("tmp_energies.txt", "w")',
               'def print_energy(atoms=system):',
@@ -593,10 +600,11 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
               f'dyn.attach(print_energy, interval={interval})',
               f'dyn.attach(print_rxn_coord, interval={interval})',
               f'dyn.attach(traj.write, interval={interval})',
-              # Need to add if statement to turn on pulling on during pulling
-              # simulation
-              # Also check the calculation for interval is correct (currently wrong)
-              f'dyn.attach(update_reference, interval={interval})',
+              # Check this function is not being called at interval ==0
+              # Currently only value for integer values of 1/dt and error
+              # may compound
+              f'if {pulling_rate} is not None:'
+              f'    dyn.attach(update_reference, interval={1//dt})',
               f'dyn.run(steps={n_steps})',
               'energy_file.close()',
               sep='\n', file=quippy_script)

@@ -332,7 +332,7 @@ class UmbrellaGAP(GAP):
 
         pt += [f'gap_pot = {potential_class}("IP GAP", '
                f'param_filename="{self.name}.xml")\n',
-               f'custom_atoms = CustomAtoms(atoms=system)\n',
+               f'custom_atoms = RxnCoordinateAtoms(atoms=system)\n',
                f'coordinate = {self.coordinate}\n',
                f'pot = GAPUmbrellaCalculator(gap_calc=gap_pot,'
                f'coord_type="{self.coord_type}",'

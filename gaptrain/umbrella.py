@@ -2,12 +2,79 @@ from ase.calculators.calculator import Calculator
 from gaptrain.calculators import DFTB
 from gaptrain.md import run_umbrella_gapmd
 from gaptrain.data import Data
+from gaptrain.log import logger
 from ase.atoms import Atoms
-import logging
+from copy import copy
 import numpy as np
+import xml.etree.cElementTree as ET
+from xml.dom import minidom
+import os
+
+
+def _write_xml_file(energy_interval, coord_interval, temp, temp_interval,
+                   file_names, energy_function):
+    """Writes the xml input file required for PyWham"""
+
+    root = ET.Element("WhamSpec")
+    general = ET.SubElement(root, "General")
+
+    # Coordinate block
+    coordinate = ET.SubElement(general, 'Coordinates')
+    ET.SubElement(coordinate, "Coordinate", name=f"{energy_function}")
+    ET.SubElement(coordinate, "Coordinate", name="Reaction coordinate")
+
+    # Default Coordinate File Reader Block
+    default_coord = ET.SubElement(general, 'DefaultCoordinateFileReader',
+                                  returnsTime='false')
+    ET.SubElement(default_coord, "ReturnList", name=f"{energy_function}")
+    ET.SubElement(default_coord, "ReturnList", name="Reaction coordinate")
+
+    # Binnings block
+    binnings = ET.SubElement(general, 'Binnings')
+    binning_1 = ET.SubElement(binnings, "Binning", name=f"{energy_function}")
+    ET.SubElement(binning_1, "Interval").text = f'{energy_interval}'
+    binning_2 = ET.SubElement(binnings, "Binning", name="Reaction coordinate")
+    # Add begin/end if necessary
+    # ET.SubElement(binning_2, "Begin").text = "interval"
+    # ET.SubElement(binning_2, "End").text = "interval"
+    ET.SubElement(binning_2, "Interval").text = f'{coord_interval}'
+
+    # Trajectories block
+    trajectories = ET.SubElement(root, "Trajectories")
+
+    for i, file_name in enumerate(file_names):
+        trajectory_1 = ET.SubElement(trajectories, 'Trajectory', T=f'{temp[i]}')
+        ET.SubElement(trajectory_1, 'EnergyFunction').text = f'{energy_function}'
+        coord_file = ET.SubElement(trajectory_1, 'CoordinateFiles')
+        ET.SubElement(coord_file, 'CoordinateFile').text = f'{file_name}'
+
+    # Jobs block
+    jobs = ET.SubElement(root, "Jobs")
+
+    free_energy = ET.SubElement(jobs, 'FreeEnergy', outFilePrefix='out/fe')
+    coordinates = ET.SubElement(free_energy, 'Coordinates')
+    ET.SubElement(coordinates, 'Coodinate', name='Reaction coodinate')
+    ET.SubElement(free_energy, 'EnergyFunction').text = f'{energy_function}'
+    ET.SubElement(free_energy,
+                  'Temperatures').text = f'{temp[0]}:{temp_interval}:{temp[-1]}'
+    parameters = ET.SubElement(free_energy, 'Parameters')
+    ET.SubElement(parameters, 'Parameter', name="in_kT").text = "true"
+
+    heat_capacity = ET.SubElement(jobs, 'HeatCapacity', outFile='out/cv')
+    ET.SubElement(heat_capacity, 'EnergyFunction').text = f'{energy_function}'
+    ET.SubElement(heat_capacity,
+                  'Temperatures').text = f'{temp[0]}:{temp_interval}:{temp[-1]}'
+
+    ET.SubElement(jobs, 'DensityOfStates', outFile='out/dos')
+
+    # Write file with indentation
+    xml_string = minidom.parseString(ET.tostring(root)).toprettyxml(indent="   ")
+    with open("wham.spec.xml", "w") as f:
+        f.write(xml_string)
 
 
 def _get_distance_derivative(atoms, indexes, reference):
+    """Calculates the vector of the derivative of the harmonic bias"""
 
     derivitive_vector = np.zeros((len(atoms), 3))
 
@@ -39,12 +106,18 @@ def _get_rmsd_derivative(atoms, indexes, reference):
     return NotImplementedError
 
 
-class CustomAtoms(Atoms):
+class RxnCoordinateAtoms(Atoms):
+    """
+    Extends the ASE Atoms class to include a function which returns
+    the Euclidean distance reaction coordinate
+    """
 
     def get_rxn_coords(self, indexes):
 
         euclidean_distance = self.atoms.get_distance(indexes[0], indexes[1],
                                                      mic=True)
+
+        assert euclidean_distance > 0
 
         return euclidean_distance
 
@@ -54,6 +127,7 @@ class CustomAtoms(Atoms):
 
 
 class DFTBUmbrellaCalculator(DFTB):
+    
 
     implemented_properties = ["energy", "forces"]
 
@@ -110,8 +184,6 @@ class GAPUmbrellaCalculator(Calculator):
 
         forces = gap_atoms.get_forces() + bias
 
-        logging.info(f'Reference: {self.reference}')
-
         return forces
 
     def __init__(self, gap_calc=None, coord_type=None, coordinate=None,
@@ -146,49 +218,76 @@ class UmbrellaSampling:
                                   reference=self.reference,
                                   distance=self.distance,
                                   pulling_rate=self.pulling_rate,
+                                  num_windows=self.num_windows,
                                   **self.kwargs)
 
         traj.save('traj_test_energy.xyz')
 
         umbrella_frames = Data()
-        # Need to modify splicing such that it takes e.g., n % of frames
-        [umbrella_frames.add(frame) for frame in traj[::10]]
+        frame_num = len(traj) // 10
+        [umbrella_frames.add(frame) for frame in traj[::frame_num]]
+
+        self.simulation_time = self.distance / self.pulling_rate
 
         return umbrella_frames
 
     def run_umbrella_sampling(self, frames, gap, temp, dt, interval,
-                              coord_type, coordinate, bias_strength, reference,
-                              **kwargs):
+                              coord_type, coordinate, bias_strength, **kwargs):
 
+        logger.info(f'kwargs in umbrella.py: {kwargs}')
+
+        # Reference needs to be different for each window!
         for i, frame in enumerate(frames):
+
+            assert self.simulation_time is not None
+
+            window_ref = self.init_ref + (i * self.simulation_time * self.pulling_rate / self.num_windows)
+            logger.info(f'Window reference = {window_ref}')
+
             traj = run_umbrella_gapmd(frame,
-                                       gap=gap,
-                                    temp=temp,
-                                    dt=dt,
-                                    interval=interval,
-                                    coord_type=coord_type,
-                                    coordinate=coordinate,
-                                    bias_strength=bias_strength,
-                                    reference=reference)
+                                      gap=gap,
+                                      temp=temp,
+                                      dt=dt,
+                                      interval=interval,
+                                      coord_type=coord_type,
+                                      coordinate=coordinate,
+                                      bias_strength=bias_strength,
+                                      reference=window_ref,
+                                      **kwargs)
 
             # decorator to have input files made elsewhere?
-            with open('test_input.txt', 'w') as outfile:
+
+            # if it doesn't make enough files it may just print default energy
+            # and reference 0.04914365296360979 for the energy
+
+            # Also for some reason it keeps printing
+
+            # Also need to check how I calculate the US potential energy above
+            with open(f'window_{i}.txt', 'w') as outfile:
                 for configuration in traj:
                     print(f'{configuration.energy}',
                           f'{configuration.rxn_coord}', file=outfile)
 
-        return NotImplementedError
+        return None
 
     def run_wham_analysis(self):
 
-        # Function to generate/make input files for wham and then run it
+        file_list = [f'window_{i}.txt' for i in range(self.num_windows)]
+        temps = [300 for _ in range(self.num_windows)]
 
-        return NotImplementedError
+        _write_xml_file(energy_interval=0.01, coord_interval=0.1, temp=temps,
+                        temp_interval=0.1, file_names=file_list,
+                        energy_function='V')
+
+        os.system("python2 wham.py wham.spec.xml")
+
+        return None
 
     def __init__(self, init_config=None, gap=None, temp=None,
                  dt=None, interval=None, coord_type=None, coordinate=None,
                  bias_strength=None, pulling_rate=None, reference=None,
-                 init_ref=None, final_ref=None, distance=None, **kwargs):
+                 distance=None,
+                 num_windows=None, **kwargs):
         """
         :param init_config: (gaptrain.configurations.Configuration)
 
@@ -227,10 +326,9 @@ class UmbrellaSampling:
         self.reference = reference
         self.pulling_rate = pulling_rate
         self.distance = distance
+        self.num_windows = num_windows
         self.kwargs = kwargs
-
-        if init_ref is not None:
-            self.init_ref = init_ref
-
-        if final_ref is not None:
-            self.final_ref = final_ref
+        self.simulation_time = None
+        # Unsure if we need to copy reference (worried it is being overwritten
+        # in the pulling method
+        self.init_ref = copy(reference)
