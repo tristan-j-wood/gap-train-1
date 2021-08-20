@@ -466,9 +466,8 @@ def run_umbrella_dftbmd(configuration, temp, dt, interval, **kwargs):
 
 
 @work_in_tmp_dir(copied_exts=['.xml'])
-def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
-                       coord_type=None, coordinate=None, bias_strength=None,
-                       reference=None, distance=None, pulling_rate=None,
+def run_umbrella_gapmd(configuration, umbrella_gap, temp, dt, interval,
+                       init_temp=None, distance=None, pulling_rate=None,
                        **kwargs):
     """
     Run umbrella sampling molecular dynamics on a system using a GAP to
@@ -477,7 +476,7 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
     ---------------------------------------------------------------------------
     :param configuration: (gaptrain.configurations.Configuration)
 
-    :param gap: (gaptrain.gap.GAP | gaptrain.gap.AdditiveGAP)
+    :param umbrella_gap: (gaptrain.gap.UmbrellaGAP)
 
     :param temp: (float) Temperature in K to initialise velocities and to run
                  NVT MD, if temp=0 then will run NVE
@@ -488,18 +487,6 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
 
     :param init_temp: (float | None) Initial temperature to initialise momenta
                       with. If None then will be set at temp
-
-    :param coord_type: (str | None) Type of coordinate to perform bias along.
-                       Must be in the list ['distance', 'rmsd', 'torsion']
-
-    :param coordinate: (list | None) Indices of the atoms which define the
-                       reaction coordinate
-
-    :param bias_strength: (float | None) Value of the bias strength, K, used in
-                          umbrella sampling
-
-    :param reference: (float | None) Value of the reference value, ξ_i, used in
-                      umbrella sampling
 
     :param distance: (float | None) Distance in Å to pull the system apart,
                      starting from the reference value
@@ -561,13 +548,6 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
     if init_temp is None:
         init_temp = temp
 
-    umbrella_gap = UmbrellaGAP(name=gap.name,
-                               system=gap.system,
-                               coord_type=coord_type,
-                               coordinate=coordinate,
-                               bias_strength=bias_strength,
-                               reference=reference)
-
     # Print a Python script to execute quippy and use ASE to drive the dynamics
     with open(f'gap.py', 'w') as quippy_script:
         print('from __future__ import print_function',
@@ -585,6 +565,7 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
               'system.center()',
               f'{umbrella_gap.ase_gap_potential_str()}',
               'system.set_calculator(pot)',
+              f'system = RxnCoordinateAtoms(system)',
               ase_momenta_string(configuration, init_temp, bbond_energy,
                                  fbond_energy),
               'traj = Trajectory("tmp.traj", \'w\', system)\n',
@@ -592,7 +573,7 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
               'def print_energy(atoms=system):',
               '    energy_file.write(str(atoms.get_potential_energy())+"\\n")\n',
               'rxn_coord_file = open("tmp_rxn_coord.txt", "w")',
-              'def print_rxn_coord(atoms=custom_atoms):',
+              'def print_rxn_coord(atoms=system):',
               '    rxn_coord_file.write(str(atoms.get_rxn_coords(coordinate))+"\\n")\n',
               f'def update_reference(pulling_rate={pulling_rate}):',
               '    pot.reference += pulling_rate',
@@ -603,7 +584,7 @@ def run_umbrella_gapmd(configuration, gap, temp, dt, interval, init_temp=None,
               # Check this function is not being called at interval ==0
               # Currently only value for integer values of 1/dt and error
               # may compound
-              f'if {pulling_rate} is not None:'
+              f'if {pulling_rate} != None:'
               f'    dyn.attach(update_reference, interval={1//dt})',
               f'dyn.run(steps={n_steps})',
               'energy_file.close()',

@@ -55,7 +55,7 @@ def test_gapumbrellacalculator():
 
     assert hasattr(gap_umbrella_calc, 'calculator')
     assert hasattr(gap_umbrella_calc, 'coordinate')
-    assert hasattr(gap_umbrella_calc, 'bias_strength')
+    assert hasattr(gap_umbrella_calc, 'spring_const')
     assert hasattr(gap_umbrella_calc, 'reference')
 
     return None

@@ -319,6 +319,21 @@ class SoluteIntraGAP(IntraGAP):
 
 
 class UmbrellaGAP(GAP):
+    # finish this docstring
+    """
+    :param coord_type: (str | None) Type of coordinate to perform bias along.
+                       Must be in the list ['distance', 'rmsd', 'torsion']
+
+    :param coordinate: (list | None) Indices of the atoms which define the
+                       reaction coordinate
+
+    :param spring_const: (float | None) Value of the spring_const, K, used in
+                          umbrella sampling
+
+    :param reference: (float | None) Value of the reference value, ξ_i, used in
+                      umbrella sampling
+
+    """
 
     def ase_gap_potential_str(self):
         """Generate the quippy/ASE string to run the potential"""
@@ -332,17 +347,16 @@ class UmbrellaGAP(GAP):
 
         pt += [f'gap_pot = {potential_class}("IP GAP", '
                f'param_filename="{self.name}.xml")\n',
-               f'custom_atoms = RxnCoordinateAtoms(atoms=system)\n',
                f'coordinate = {self.coordinate}\n',
                f'pot = GAPUmbrellaCalculator(gap_calc=gap_pot,'
                f'coord_type="{self.coord_type}",'
                f'coordinate={self.coordinate},'
-               f'bias_strength={self.bias_strength},'
+               f'spring_const={self.spring_const},'
                f'reference={self.reference})\n']
 
         return ''.join(pt)
 
-    def __init__(self, name, system, coord_type, coordinate, bias_strength,
+    def __init__(self, name, system, coord_type, coordinate, spring_const,
                  reference):
         """An umbrella sampling GAP, which uses the GAPUmbrella calculator.
         Must be initialised with a system so the molecules are defined
@@ -354,7 +368,7 @@ class UmbrellaGAP(GAP):
 
         self.coord_type = coord_type
         self.coordinate = coordinate
-        self.bias_strength = bias_strength
+        self.spring_const = spring_const
         self.reference = reference
 
         logger.info(f'Initialised an umbrella-GAP')
