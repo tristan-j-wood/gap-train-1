@@ -12,9 +12,9 @@ from xml.dom import minidom
 import os
 
 
-def _write_xml_file(energy_interval, energy_begin, energy_end, coord_begin,
-                    coord_end, coord_interval, temp, temp_interval, file_names,
-                    energy_function):
+def _write_xml_file(energy_interval, coord_interval, temp, temp_interval,
+                    file_names, energy_function, energy_begin=None,
+                    energy_end=None, coord_begin=None, coord_end=None):
     """Writes the xml input file required for PyWham"""
 
     root = ET.Element("WhamSpec")
@@ -34,13 +34,19 @@ def _write_xml_file(energy_interval, energy_begin, energy_end, coord_begin,
     # Binnings block
     binnings = ET.SubElement(general, 'Binnings')
     binning_1 = ET.SubElement(binnings, "Binning", name=f"{energy_function}")
-    # ET.SubElement(binning_1, "Begin").text = f'{energy_begin}'
-    # ET.SubElement(binning_1, "End").text = f'{energy_end}'
+
+    if (energy_begin and energy_end) is not None:
+        ET.SubElement(binning_1, "Begin").text = f'{energy_begin}'
+        ET.SubElement(binning_1, "End").text = f'{energy_end}'
+
     ET.SubElement(binning_1, "Interval").text = f'{energy_interval}'
 
     binning_2 = ET.SubElement(binnings, "Binning", name="Reaction coordinate")
-    # ET.SubElement(binning_2, "Begin").text = f'{coord_begin}'
-    # ET.SubElement(binning_2, "End").text = f'{coord_end}'
+
+    if (coord_begin and coord_end) is not None:
+        ET.SubElement(binning_2, "Begin").text = f'{coord_begin}'
+        ET.SubElement(binning_2, "End").text = f'{coord_end}'
+
     ET.SubElement(binning_2, "Interval").text = f'{coord_interval}'
 
     # Trajectories block
@@ -215,7 +221,21 @@ class UmbrellaSampling:
 
     def generate_pulling_configs(self, temp=None, dt=None, interval=None,
                                  pulling_rate=None, final_value=None, **kwargs):
-        """Generates an MD trajectory along a reaction coordinate"""
+        """Generates an MD trajectory along a reaction coordinate
+
+        :param temp: (float) Temperature in K to run pulling simulation and
+                     umbrella sampling
+
+        :param dt: (float) Timestep in fs
+
+        :param interval: (int) Interval between printing the geometry
+
+        :param pulling_rate: (float) Rate of pulling in Å / fs
+
+        :param final_value: (float) Final separation of system in Å
+
+        :param kwargs: {fs, ps, ns} Simulation time in some units
+        """
 
         self.pulling_rate = pulling_rate
         distance = final_value - self.reference
@@ -247,6 +267,8 @@ class UmbrellaSampling:
         """
         Performs umbrella sampling under a harmonic bias in windows
         generated from the pulling trajectory
+
+        :param num_windows: (int) Number of umbrella sampling windows to run
         """
 
         self.num_windows = num_windows
@@ -257,10 +279,15 @@ class UmbrellaSampling:
         # paralellise this
         for window, frame in enumerate(umbrella_frames):
 
-            assert self.simulation_time is not None
+            # assert self.simulation_time is not None
+            # window_ref = self.reference + (window * self.simulation_time *
+            #                                self.pulling_rate / self.num_windows)
 
-            window_ref = self.reference + (window * self.simulation_time *
-                                           self.pulling_rate / self.num_windows)
+            # Think if this method is valid
+            window_atoms = frame.ase_atoms()
+            window_ref = window_atoms.get_distance(self.coordinate[0],
+                                                   self.coordinate[1],
+                                                   mic=True)
 
             logger.info(f'Running umbrella sampling')
             logger.info(f'Window {window} with reference {window_ref:.2f} Å')
@@ -306,32 +333,16 @@ class UmbrellaSampling:
 
     def __init__(self, init_config=None, gap=None, coordinate=None,
                  spring_const=None):
-        # Fix this docstring
         """
         :param init_config: (gaptrain.configurations.Configuration)
 
         :param gap: (gaptrain.gap.GAP)
-
-        :param temp: (float) Temperature in K to run pulling simulation and
-                     umbrella sampling
-
-        :param dt: (float) Timestep in fs
-
-        :param interval: (int) Interval between printing the geometry
-
-        :param coord_type: (str | None) Type of coordinate to perform bias
-                           along. Must be in the list ['distance', 'rmsd',
-                            'torsion']
 
         :param coordinate: (list | None) Indices of the atoms which define the
                            reaction coordinate
 
         :param spring_const: (float | None) Value of the spring constant, K,
                               used in umbrella sampling
-
-        :param reference: (float | None) Value of the reference value, ξ_i,
-                          used in umbrella sampling
-        :param kwargs: {fs, ps, ns} Simulation time in some units
         """
 
         if len(coordinate) == 2:
@@ -356,6 +367,7 @@ class UmbrellaSampling:
 
         self.init_config = init_config
         self.gap = gap
+        self.coordinate = coordinate
         self.final_value = None
         self.pulling_rate = None
         self.num_windows = None

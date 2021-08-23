@@ -319,21 +319,6 @@ class SoluteIntraGAP(IntraGAP):
 
 
 class UmbrellaGAP(GAP):
-    # finish this docstring
-    """
-    :param coord_type: (str | None) Type of coordinate to perform bias along.
-                       Must be in the list ['distance', 'rmsd', 'torsion']
-
-    :param coordinate: (list | None) Indices of the atoms which define the
-                       reaction coordinate
-
-    :param spring_const: (float | None) Value of the spring_const, K, used in
-                          umbrella sampling
-
-    :param reference: (float | None) Value of the reference value, ξ_i, used in
-                      umbrella sampling
-
-    """
 
     def ase_gap_potential_str(self):
         """Generate the quippy/ASE string to run the potential"""
@@ -362,7 +347,21 @@ class UmbrellaGAP(GAP):
         Must be initialised with a system so the molecules are defined
 
         :param name: (str)
+
         :param system: (gt.system.System)
+
+        :param coord_type: (str | None) Type of coordinate to perform bias along.
+                       Must be in the list ['distance', 'rmsd', 'torsion']
+
+        :param coordinate: (list | None) Indices of the atoms which define the
+                       reaction coordinate
+
+        :param spring_const: (float | None) Value of the spring_const, K,
+                             used in umbrella sampling
+
+        :param reference: (float | None) Value of the reference value, ξ_i,
+                           used in umbrella sampling
+
         """
         super().__init__(name, system)
 
