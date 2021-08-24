@@ -185,8 +185,6 @@ class GAPUmbrellaCalculator(Calculator):
 
         bias = 0.5 * self.spring_const * coord
 
-        logger.info(f'Energy bias: {bias}')
-
         return bias
 
     def get_potential_energy(self, atoms=None, force_consistent=False,
@@ -280,7 +278,7 @@ class UmbrellaSampling:
         return traj
 
     def run_umbrella_sampling(self, traj, temp, dt, interval, num_windows,
-                              **kwargs):
+                              pulling_rate=None, **kwargs):
         """
         Performs umbrella sampling under a harmonic bias in windows
         generated from the pulling trajectory
@@ -288,45 +286,55 @@ class UmbrellaSampling:
         :param num_windows: (int) Number of umbrella sampling windows to run
         """
 
+        if ('ps' and 'ns' and 'fs') not in kwargs:
+            raise ValueError("Must specify time in umbrella sampling windows")
+
         self.num_windows = num_windows
         umbrella_frames = Data()
-        frame_num = len(traj) // self.num_windows
+        frame_num = len(traj) // (self.num_windows - 1)
         [umbrella_frames.add(frame) for frame in traj[::frame_num]]
 
-        # paralellise this
+        assert len(umbrella_frames) == self.num_windows
+
+        combined_traj = Data()
+
+        # paralellise this but watch out for self.variables
         for window, frame in enumerate(umbrella_frames):
 
-            # assert self.simulation_time is not None
-            # window_ref = self.reference + (window * self.simulation_time *
-            #                                self.pulling_rate / self.num_windows)
+            self.pulling_rate = pulling_rate
 
-            # Think if this method is valid
+            if self.pulling_rate is not None:
+                logger.warning("Pulling rate is not None for umbrella sampling"
+                               " simulations!")
+
             window_atoms = frame.ase_atoms()
-            window_ref = window_atoms.get_distance(self.coordinate[0],
-                                                   self.coordinate[1],
-                                                   mic=True)
+
+            self.umbrella_gap.reference = window_atoms.get_distance(
+                self.coordinate[0],
+                self.coordinate[1],
+                mic=True)
 
             logger.info(f'Running umbrella sampling')
-            logger.info(f'Window {window} with reference {window_ref:.2f} Å')
+            logger.info(f'Window {window} with reference '
+                        f'{self.umbrella_gap.reference:.2f} Å')
 
             traj = run_umbrella_gapmd(configuration=frame,
                                       umbrella_gap=self.umbrella_gap,
                                       temp=temp,
                                       dt=dt,
                                       interval=interval,
-                                      reference=window_ref,
                                       **kwargs)
 
-            traj.save(f'window_{window}_traj.xyz')
+            combined_traj += traj
 
-            # decorator to have input files made elsewhere?
             # if it doesn't make enough files it may just print default energy
             # and reference 0.04914365296360979 for the energy
-            # Also need to check how I calculate the US potential energy above
             with open(f'window_{window}.txt', 'w') as outfile:
                 for configuration in traj:
                     print(f'{configuration.energy}',
                           f'{configuration.rxn_coord}', file=outfile)
+
+        combined_traj.save(filename='combined_windows.xyz')
 
         return None
 
@@ -334,7 +342,10 @@ class UmbrellaSampling:
                           temp_interval, energy_function):
         """Calculates the Gibbs free energy using the WHAM method"""
 
+        # Not sure all windows are being picked up here
         file_list = [f'window_{i}.txt' for i in range(self.num_windows)]
+        logger.info(f'File list: {file_list}')
+
         temps = [temp for _ in range(self.num_windows)]
 
         # Might want to input being and end values
@@ -375,11 +386,12 @@ class UmbrellaSampling:
             raise ValueError("Coordinate type could not be inferred from "
                              "coordinates")
 
+        self.spring_const = spring_const
         self.umbrella_gap = UmbrellaGAP(name=gap.name,
                                         system=gap.system,
                                         coord_type=self.coord_type,
                                         coordinate=coordinate,
-                                        spring_const=spring_const,
+                                        spring_const=self.spring_const,
                                         reference=self.reference)
 
         self.init_config = init_config

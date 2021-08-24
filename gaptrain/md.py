@@ -519,7 +519,6 @@ def run_umbrella_gapmd(configuration, umbrella_gap, temp, dt, interval,
 
     a, b, c = configuration.box.size
 
-    # add check in case user has forgotten to add time when doing US windows
     if ('ps' and 'ns' and 'fs') not in kwargs:
         time = {'fs': distance / pulling_rate}
         n_steps = simulation_steps(dt, time)
@@ -584,7 +583,7 @@ def run_umbrella_gapmd(configuration, umbrella_gap, temp, dt, interval,
               # Check this function is not being called at interval ==0
               # Currently only value for integer values of 1/dt and error
               # may compound
-              f'if {pulling_rate} != None:'
+              f'if {pulling_rate} is not None:'
               f'    dyn.attach(update_reference, interval={1//dt})',
               f'dyn.run(steps={n_steps})',
               'energy_file.close()',
