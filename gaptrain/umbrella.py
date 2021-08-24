@@ -158,7 +158,7 @@ class GAPUmbrellaCalculator(Calculator):
 
     implemented_properties = ["energy", "forces"]
 
-    def _calculate_bias(self, atoms):
+    def _calculate_force_bias(self, atoms):
 
         if self.coord_type == 'distance':
             coord_derivative = _get_distance_derivative(atoms, self.coordinate,
@@ -174,13 +174,30 @@ class GAPUmbrellaCalculator(Calculator):
 
         return bias
 
-    # Do I need to modify the energy?
+    def _calculate_energy_bias(self, atoms):
+
+        indexes = self.coordinate
+
+        if self.coord_type == 'distance':
+            euclidean_distance = atoms.get_distance(indexes[0], indexes[1],
+                                                    mic=True)
+            coord = (euclidean_distance - self.reference) ** 2
+
+        bias = 0.5 * self.spring_const * coord
+
+        logger.info(f'Energy bias: {bias}')
+
+        return bias
+
     def get_potential_energy(self, atoms=None, force_consistent=False,
                              apply_constraint=True):
 
         gap_atoms = atoms.copy()
         gap_atoms.set_calculator(self.calculator)
-        energy = gap_atoms.get_potential_energy()
+
+        bias = self._calculate_energy_bias(gap_atoms)
+
+        energy = gap_atoms.get_potential_energy() + bias
 
         return energy
 
@@ -190,7 +207,7 @@ class GAPUmbrellaCalculator(Calculator):
         gap_atoms = atoms.copy()
         gap_atoms.set_calculator(self.calculator)
 
-        bias = self._calculate_bias(gap_atoms)
+        bias = self._calculate_force_bias(gap_atoms)
 
         forces = gap_atoms.get_forces() + bias
 
