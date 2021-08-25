@@ -12,77 +12,6 @@ from xml.dom import minidom
 import os
 
 
-def _write_xml_file(energy_interval, coord_interval, temp, temp_interval,
-                    file_names, energy_function, energy_begin=None,
-                    energy_end=None, coord_begin=None, coord_end=None):
-    """Writes the xml input file required for PyWham"""
-
-    root = ET.Element("WhamSpec")
-    general = ET.SubElement(root, "General")
-
-    # Coordinate block
-    coordinate = ET.SubElement(general, 'Coordinates')
-    ET.SubElement(coordinate, "Coordinate", name=f"{energy_function}")
-    ET.SubElement(coordinate, "Coordinate", name="Reaction coordinate")
-
-    # Default Coordinate File Reader Block
-    default_coord = ET.SubElement(general, 'DefaultCoordinateFileReader',
-                                  returnsTime='false')
-    ET.SubElement(default_coord, "ReturnList", name=f"{energy_function}")
-    ET.SubElement(default_coord, "ReturnList", name="Reaction coordinate")
-
-    # Binnings block
-    binnings = ET.SubElement(general, 'Binnings')
-    binning_1 = ET.SubElement(binnings, "Binning", name=f"{energy_function}")
-
-    if (energy_begin and energy_end) is not None:
-        ET.SubElement(binning_1, "Begin").text = f'{energy_begin}'
-        ET.SubElement(binning_1, "End").text = f'{energy_end}'
-
-    ET.SubElement(binning_1, "Interval").text = f'{energy_interval}'
-
-    binning_2 = ET.SubElement(binnings, "Binning", name="Reaction coordinate")
-
-    if (coord_begin and coord_end) is not None:
-        ET.SubElement(binning_2, "Begin").text = f'{coord_begin}'
-        ET.SubElement(binning_2, "End").text = f'{coord_end}'
-
-    ET.SubElement(binning_2, "Interval").text = f'{coord_interval}'
-
-    # Trajectories block
-    trajectories = ET.SubElement(root, "Trajectories")
-
-    for i, file_name in enumerate(file_names):
-        trajectory_1 = ET.SubElement(trajectories, 'Trajectory', T=f'{temp[i]}')
-        ET.SubElement(trajectory_1, 'EnergyFunction').text = f'{energy_function}'
-        coord_file = ET.SubElement(trajectory_1, 'CoordinateFiles')
-        ET.SubElement(coord_file, 'CoordinateFile').text = f'{file_name}'
-
-    # Jobs block
-    jobs = ET.SubElement(root, "Jobs")
-
-    free_energy = ET.SubElement(jobs, 'FreeEnergy', outFilePrefix='out/fe')
-    coordinates = ET.SubElement(free_energy, 'Coordinates')
-    ET.SubElement(coordinates, 'Coodinate', name='Reaction coodinate')
-    ET.SubElement(free_energy, 'EnergyFunction').text = f'{energy_function}'
-    ET.SubElement(free_energy,
-                  'Temperatures').text = f'{temp[0]}:{temp_interval}:{temp[-1]}'
-    parameters = ET.SubElement(free_energy, 'Parameters')
-    ET.SubElement(parameters, 'Parameter', name="in_kT").text = "true"
-
-    heat_capacity = ET.SubElement(jobs, 'HeatCapacity', outFile='out/cv')
-    ET.SubElement(heat_capacity, 'EnergyFunction').text = f'{energy_function}'
-    ET.SubElement(heat_capacity,
-                  'Temperatures').text = f'{temp[0]}:{temp_interval}:{temp[-1]}'
-
-    ET.SubElement(jobs, 'DensityOfStates', outFile='out/dos')
-
-    # Write file with indentation
-    xml_string = minidom.parseString(ET.tostring(root)).toprettyxml(indent="   ")
-    with open("wham.spec.xml", "w") as f:
-        f.write(xml_string)
-
-
 def _get_distance_derivative(atoms, indexes, reference):
     """Calculates the vector of the derivative of the harmonic bias"""
 
@@ -235,7 +164,8 @@ class UmbrellaSampling:
     """
 
     def generate_pulling_configs(self, temp=None, dt=None, interval=None,
-                                 pulling_rate=None, final_value=None, **kwargs):
+                                 pulling_rate=None, final_value=None,
+                                 **kwargs):
         """Generates an MD trajectory along a reaction coordinate
 
         :param temp: (float) Temperature in K to run pulling simulation and
@@ -291,10 +221,17 @@ class UmbrellaSampling:
 
         self.num_windows = num_windows
         umbrella_frames = Data()
-        frame_num = len(traj) // (self.num_windows - 1)
+        frame_num = len(traj) // self.num_windows
+
         [umbrella_frames.add(frame) for frame in traj[::frame_num]]
 
-        assert len(umbrella_frames) == self.num_windows
+        # Instead look through each frame to find the distance and take even
+        # frames such that the distances are even across the trajectory
+        logger.info(f'traj len: {len(traj)}')
+        logger.info(f'Frame num: {frame_num}')
+        logger.info(f'Umbrella frames: {len(umbrella_frames)}')
+        logger.info(f'Num windows: {num_windows}')
+        # assert len(umbrella_frames) == self.num_windows
 
         combined_traj = Data()
 
@@ -327,37 +264,125 @@ class UmbrellaSampling:
 
             combined_traj += traj
 
-            # if it doesn't make enough files it may just print default energy
-            # and reference 0.04914365296360979 for the energy
             with open(f'window_{window}.txt', 'w') as outfile:
                 for configuration in traj:
                     print(f'{configuration.energy}',
-                          f'{configuration.rxn_coord}', file=outfile)
+                          f'{configuration.rxn_coord}',
+                          f'{self.umbrella_gap.reference}', file=outfile)
 
         combined_traj.save(filename='combined_windows.xyz')
 
         return None
 
     def run_wham_analysis(self, temp, energy_interval, coord_interval,
-                          temp_interval, energy_function):
+                          energy_function, temp_interval=0.1):
         """Calculates the Gibbs free energy using the WHAM method"""
 
-        # Not sure all windows are being picked up here
         file_list = [f'window_{i}.txt' for i in range(self.num_windows)]
-        logger.info(f'File list: {file_list}')
+        logger.info(f'Files to be read: {file_list}')
 
         temps = [temp for _ in range(self.num_windows)]
 
-        # Might want to input being and end values
-        _write_xml_file(energy_interval=energy_interval, energy_begin=None,
-                        energy_end=None, coord_begin=None, coord_end=None,
-                        coord_interval=coord_interval, temp=temps,
-                        temp_interval=temp_interval, file_names=file_list,
-                        energy_function=energy_function)
+        self._write_xml_file(energy_interval=energy_interval,
+                             energy_begin=None, energy_end=None,
+                             coord_begin=None, coord_end=None,
+                             coord_interval=coord_interval, temp=temps,
+                             temp_interval=temp_interval, file_names=file_list,
+                             energy_function=energy_function)
 
         os.system("python2 wham.py wham.spec.xml")
 
         return None
+
+    def _write_xml_file(self, energy_interval, coord_interval, temp,
+                        temp_interval, file_names, energy_function,
+                        energy_begin=None, energy_end=None, coord_begin=None,
+                        coord_end=None):
+        """Writes the xml input file required for PyWham"""
+
+        if energy_function != 'harmonic':
+            raise NotImplementedError("Only 'harmonic' bias implemented")
+
+        root = ET.Element("WhamSpec")
+        general = ET.SubElement(root, "General")
+
+        # Coordinate block
+        coordinate = ET.SubElement(general, 'Coordinates')
+        ET.SubElement(coordinate, "Coordinate", name="V")
+        ET.SubElement(coordinate, "Coordinate", name="Q")
+
+        # Default Coordinate File Reader Block
+        default_coord = ET.SubElement(general, 'DefaultCoordinateFileReader',
+                                      returnsTime='false')
+        ET.SubElement(default_coord, "ReturnList", name="V")
+        ET.SubElement(default_coord, "ReturnList", name="Q")
+
+        # Binnings block
+        binnings = ET.SubElement(general, 'Binnings')
+        binning_1 = ET.SubElement(binnings, "Binning",
+                                  name="V")
+
+        if (energy_begin and energy_end) is not None:
+            ET.SubElement(binning_1, "Begin").text = f'{energy_begin}'
+            ET.SubElement(binning_1, "End").text = f'{energy_end}'
+
+        ET.SubElement(binning_1, "Interval").text = f'{energy_interval}'
+
+        binning_2 = ET.SubElement(binnings, "Binning",
+                                  name="Q")
+
+        if (coord_begin and coord_end) is not None:
+            ET.SubElement(binning_2, "Begin").text = f'{coord_begin}'
+            ET.SubElement(binning_2, "End").text = f'{coord_end}'
+
+        ET.SubElement(binning_2, "Interval").text = f'{coord_interval}'
+
+        # Trajectories block
+        trajectories = ET.SubElement(root, "Trajectories")
+
+        for i, file_name in enumerate(file_names):
+
+            with open(file_name) as line:
+                ref = line.readline().split()[2]
+
+            function = f'V+0.5*{self.spring_const}*(Q-{ref})**2'
+
+            trajectory_1 = ET.SubElement(trajectories, 'Trajectory',
+                                         T=f'{temp[i]}')
+            ET.SubElement(trajectory_1,
+                          'EnergyFunction').text = function
+            coord_file = ET.SubElement(trajectory_1, 'CoordinateFiles')
+            ET.SubElement(coord_file, 'CoordinateFile').text = f'{file_name}'
+
+        # Jobs block
+        jobs = ET.SubElement(root, "Jobs")
+
+        free_energy = ET.SubElement(jobs, 'FreeEnergy',
+                                    outFilePrefix='free_energy_')
+        coordinates = ET.SubElement(free_energy, 'Coordinates')
+        ET.SubElement(coordinates, 'Coodinate', name='Q')
+        ET.SubElement(free_energy,
+                      'EnergyFunction').text = "V"
+        ET.SubElement(free_energy,
+                      'Temperatures').text = (f'{temp[0]}:{temp_interval}:'
+                                              f'{temp[-1]}')
+        parameters = ET.SubElement(free_energy, 'Parameters')
+        ET.SubElement(parameters, 'Parameter', name="in_kT").text = "true"
+
+        heat_capacity = ET.SubElement(jobs, 'HeatCapacity', outFile='cv.txt')
+        ET.SubElement(heat_capacity,
+                      'EnergyFunction').text = "V"
+        ET.SubElement(heat_capacity,
+                      'Temperatures').text = (f'{temp[0]}:{temp_interval}:'
+                                              f'{temp[-1]}')
+
+        ET.SubElement(jobs, 'DensityOfStates', outFile='dos.txt')
+
+        # Write file with indentation
+        xml_string = minidom.parseString(ET.tostring(root)).toprettyxml(
+            indent="   ")
+        with open("wham.spec.xml", "w") as f:
+            f.write(xml_string)
 
     def __init__(self, init_config=None, gap=None, coordinate=None,
                  spring_const=None):
