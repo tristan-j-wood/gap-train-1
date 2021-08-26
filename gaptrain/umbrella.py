@@ -10,6 +10,7 @@ import numpy as np
 import xml.etree.cElementTree as ET
 from xml.dom import minidom
 import os
+from copy import deepcopy
 
 
 def _get_distance_derivative(atoms, indexes, reference):
@@ -182,6 +183,7 @@ class UmbrellaSampling:
         :param kwargs: {fs, ps, ns} Simulation time in some units
         """
 
+        self.final_value = final_value
         self.pulling_rate = pulling_rate
         distance = final_value - self.reference
         self.simulation_time = distance / self.pulling_rate
@@ -219,22 +221,36 @@ class UmbrellaSampling:
         if ('ps' and 'ns' and 'fs') not in kwargs:
             raise ValueError("Must specify time in umbrella sampling windows")
 
+        if num_windows < 1:
+            raise ValueError("Must specify more than 1 window")
+
         self.num_windows = num_windows
+        init_value = self.reference
+        distance = self.final_value - init_value
+        distance_intervals = distance / (self.num_windows - 1)
+
+        traj_dists = {}
+        for i, frame in enumerate(traj):
+            frame_atoms = frame.ase_atoms()
+
+            dist = frame_atoms.get_distance(self.coordinate[0],
+                                            self.coordinate[1],
+                                            mic=True)
+            traj_dists[i] = dist
+
         umbrella_frames = Data()
-        frame_num = len(traj) // self.num_windows
+        for _ in range(self.num_windows):
+            window_dists = deepcopy(traj_dists)
 
-        [umbrella_frames.add(frame) for frame in traj[::frame_num]]
+            for key, value in window_dists.items():
+                window_dists[key] = abs(value - init_value)
 
-        # Instead look through each frame to find the distance and take even
-        # frames such that the distances are even across the trajectory
-        logger.info(f'traj len: {len(traj)}')
-        logger.info(f'Frame num: {frame_num}')
-        logger.info(f'Umbrella frames: {len(umbrella_frames)}')
-        logger.info(f'Num windows: {num_windows}')
-        # assert len(umbrella_frames) == self.num_windows
+            index = min(window_dists.keys(), key=window_dists.get)
+            init_value += distance_intervals
+
+            umbrella_frames.add(traj[index])
 
         combined_traj = Data()
-
         # paralellise this but watch out for self.variables
         for window, frame in enumerate(umbrella_frames):
 
@@ -244,6 +260,7 @@ class UmbrellaSampling:
                 logger.warning("Pulling rate is not None for umbrella sampling"
                                " simulations!")
 
+            # Repeating the calculation above to get distances
             window_atoms = frame.ase_atoms()
 
             self.umbrella_gap.reference = window_atoms.get_distance(
@@ -278,6 +295,7 @@ class UmbrellaSampling:
                           energy_function, temp_interval=0.1):
         """Calculates the Gibbs free energy using the WHAM method"""
 
+        logger.info(f'{self.num_windows}')
         file_list = [f'window_{i}.txt' for i in range(self.num_windows)]
         logger.info(f'Files to be read: {file_list}')
 
