@@ -1,7 +1,6 @@
 import shutil
 from gaptrain.trajectories import Trajectory
 from gaptrain.calculators import DFTB
-from gaptrain.gap import UmbrellaGAP
 from gaptrain.utils import work_in_tmp_dir
 from gaptrain.log import logger
 from gaptrain.gtconfig import GTConfig
@@ -465,10 +464,10 @@ def run_umbrella_dftbmd(configuration, temp, dt, interval, **kwargs):
     return Trajectory('geo_end.xyz', init_configuration=configuration)
 
 
-@work_in_tmp_dir(copied_exts=['.xml'])
+@work_in_tmp_dir(copied_exts=['.xml'], kept_exts=['.txt'])
 def run_umbrella_gapmd(configuration, umbrella_gap, temp, dt, interval,
                        init_temp=None, distance=None, pulling_rate=None,
-                       **kwargs):
+                       save_forces=False, **kwargs):
     """
     Run umbrella sampling molecular dynamics on a system using a GAP to
     predict energies and forces
@@ -493,6 +492,9 @@ def run_umbrella_gapmd(configuration, umbrella_gap, temp, dt, interval,
 
     :param pulling_rate: (float | None) Rate in Å /fs at which the pull the
                          system apart. If None, no pulling will occur
+
+    :param save_forces: (bool) If True, magnitude of force on spring are
+                    saved to a spring_forces.txt file at each interval
     -------------------------------------------------
     Keyword Arguments:
 
@@ -580,11 +582,12 @@ def run_umbrella_gapmd(configuration, umbrella_gap, temp, dt, interval,
               f'dyn.attach(print_energy, interval={interval})',
               f'dyn.attach(print_rxn_coord, interval={interval})',
               f'dyn.attach(traj.write, interval={interval})',
-              # Check this function is not being called at interval ==0
               # Currently only value for integer values of 1/dt and error
               # may compound
               f'if {pulling_rate} is not None:'
               f'    dyn.attach(update_reference, interval={1//dt})',
+              f'if {save_forces}:',
+              f'    pot.save_forces = True',
               f'dyn.run(steps={n_steps})',
               'energy_file.close()',
               sep='\n', file=quippy_script)

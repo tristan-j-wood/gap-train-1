@@ -5,6 +5,7 @@ from gaptrain.calculators import DFTB
 from gaptrain.md import run_umbrella_gapmd
 from gaptrain.data import Data
 from gaptrain.log import logger
+from gaptrain.utils import work_in_tmp_dir
 from ase.atoms import Atoms
 import numpy as np
 import xml.etree.cElementTree as ET
@@ -137,12 +138,21 @@ class GAPUmbrellaCalculator(Calculator):
 
         bias = self._calculate_force_bias(gap_atoms)
 
+        if self.save_forces:
+            force_vec = bias[self.coordinate[0]]
+            force_magnitude = np.linalg.norm(force_vec)
+            logger.info(f'Force magnitude: {force_magnitude}')
+
+            with open('spring_force.txt', 'a') as outfile:
+                print(f'{force_magnitude}', file=outfile)
+
         forces = gap_atoms.get_forces() + bias
 
         return forces
 
     def __init__(self, gap_calc=None, coord_type=None, coordinate=None,
-                 spring_const=None, reference=None, **kwargs):
+                 spring_const=None, reference=None, save_forces=False,
+                 **kwargs):
         Calculator.__init__(self, restart=None,
                             label=None, atoms=None, **kwargs)
 
@@ -151,6 +161,7 @@ class GAPUmbrellaCalculator(Calculator):
         self.coordinate = coordinate
         self.spring_const = spring_const
         self.reference = reference
+        self.save_forces = save_forces
 
         assert coord_type in ['distance', 'rmsd', 'torsion']
         assert coordinate is not None
@@ -166,7 +177,7 @@ class UmbrellaSampling:
 
     def generate_pulling_configs(self, temp=None, dt=None, interval=None,
                                  pulling_rate=None, final_value=None,
-                                 **kwargs):
+                                 save_forces=True, **kwargs):
         """Generates an MD trajectory along a reaction coordinate
 
         :param temp: (float) Temperature in K to run pulling simulation and
@@ -180,6 +191,9 @@ class UmbrellaSampling:
 
         :param final_value: (float) Final separation of system in Å
 
+        :param save_forces: (bool) If True, magnitude of force on spring are
+                            saved to a spring_forces.txt file at each interval
+
         :param kwargs: {fs, ps, ns} Simulation time in some units
         """
 
@@ -189,7 +203,7 @@ class UmbrellaSampling:
         self.simulation_time = distance / self.pulling_rate
 
         if self.simulation_time < 100:
-            logger.warning(f'Simulation time = {self.simulation_time} < 100 fs!'
+            logger.warning(f'Simulation time = {self.simulation_time} <100 fs!'
                            f' Decrease pulling rate or increase distance'
                            f' to increase simulation time')
 
@@ -203,6 +217,7 @@ class UmbrellaSampling:
                                   interval=interval,
                                   distance=distance,
                                   pulling_rate=pulling_rate,
+                                  save_forces=save_forces,
                                   **kwargs)
 
         traj.save('pulling_traj.xyz')
@@ -297,7 +312,6 @@ class UmbrellaSampling:
 
         logger.info(f'{self.num_windows}')
         file_list = [f'window_{i}.txt' for i in range(self.num_windows)]
-        logger.info(f'Files to be read: {file_list}')
 
         temps = [temp for _ in range(self.num_windows)]
 

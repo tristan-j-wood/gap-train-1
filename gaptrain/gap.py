@@ -342,7 +342,7 @@ class UmbrellaGAP(GAP):
         return ''.join(pt)
 
     def __init__(self, name, system, coord_type, coordinate, spring_const,
-                 reference):
+                 reference, save_forces=False):
         """An umbrella sampling GAP, which uses the GAPUmbrella calculator.
         Must be initialised with a system so the molecules are defined
 
@@ -350,8 +350,9 @@ class UmbrellaGAP(GAP):
 
         :param system: (gt.system.System)
 
-        :param coord_type: (str | None) Type of coordinate to perform bias along.
-                       Must be in the list ['distance', 'rmsd', 'torsion']
+        :param coord_type: (str | None) Type of coordinate to perform bias
+                           along. Must be in the list
+                           ['distance', 'rmsd', 'torsion']
 
         :param coordinate: (list | None) Indices of the atoms which define the
                        reaction coordinate
@@ -362,6 +363,9 @@ class UmbrellaGAP(GAP):
         :param reference: (float | None) Value of the reference value, ξ_i,
                            used in umbrella sampling
 
+        :param save_forces: (bool) If True, magnitude of force on spring are
+                            saved to a spring_forces.txt file at each interval
+
         """
         super().__init__(name, system)
 
@@ -369,6 +373,7 @@ class UmbrellaGAP(GAP):
         self.coordinate = coordinate
         self.spring_const = spring_const
         self.reference = reference
+        self.save_forces = save_forces
 
         logger.info(f'Initialised an umbrella-GAP')
 
