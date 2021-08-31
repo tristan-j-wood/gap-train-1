@@ -2,10 +2,9 @@ from ase.calculators.calculator import Calculator
 import gaptrain
 from gaptrain.gap import UmbrellaGAP
 from gaptrain.calculators import DFTB
-from gaptrain.md import run_umbrella_gapmd
+from gaptrain.md import run_umbrella_gapmd, run_umbrella_dftbmd
 from gaptrain.data import Data
 from gaptrain.log import logger
-from gaptrain.utils import work_in_tmp_dir
 from ase.atoms import Atoms
 import numpy as np
 import xml.etree.cElementTree as ET
@@ -67,8 +66,73 @@ class DFTBUmbrellaCalculator(DFTB):
 
     implemented_properties = ["energy", "forces"]
 
-    def __init__(self, configuration=None, atoms=None, kpts=None,
-                 Hamiltonian_Charge=None,
+    def _calculate_force_bias(self, atoms):
+
+        if self.coord_type == 'distance':
+            coord_derivative = _get_distance_derivative(atoms, self.coordinate,
+                                                        self.reference)
+
+        if self.coord_type == 'rmsd':
+            return NotImplementedError
+
+        if self.coord_type == 'torsion':
+            return NotImplementedError
+
+        bias = -0.5 * self.spring_const * coord_derivative
+
+        return bias
+
+    def _calculate_energy_bias(self, atoms):
+
+        indexes = self.coordinate
+
+        if self.coord_type == 'distance':
+            euclidean_distance = atoms.get_distance(indexes[0], indexes[1],
+                                                    mic=True)
+            coord = (euclidean_distance - self.reference) ** 2
+
+        bias = 0.5 * self.spring_const * coord
+
+        return bias
+
+    def get_potential_energy(self, atoms=None, force_consistent=False,
+                             apply_constraint=True):
+
+        dftb_atoms = atoms.copy()
+
+        dftb_calc = DFTB(kpts=(1, 1, 1))
+        dftb_atoms.set_calculator(dftb_calc)
+
+        bias = self._calculate_energy_bias(dftb_atoms)
+
+        energy = dftb_atoms.get_potential_energy() + bias
+
+        return energy
+
+    def get_forces(self, atoms=None, force_consistent=False,
+                   apply_constraint=True, **kwargs):
+
+        dftb_atoms = atoms.copy()
+
+        dftb_calc = DFTB(kpts=(1, 1, 1))
+        dftb_atoms.set_calculator(dftb_calc)
+
+        bias = self._calculate_force_bias(dftb_atoms)
+
+        if self.save_forces:
+            force_vec = bias[self.coordinate[0]]
+            force_magnitude = np.linalg.norm(force_vec)
+
+            with open('spring_force.txt', 'a') as outfile:
+                print(f'{force_magnitude}', file=outfile)
+
+        forces = dftb_atoms.get_forces() + bias
+
+        return forces
+
+    def __init__(self, configuration=None, kpts=None,
+                 Hamiltonian_Charge=None, coord_type=None, coordinate=None,
+                 spring_const=None, reference=None, save_forces=False,
                  **kwargs):
         super().__init__(restart=None,
                          label='dftb', atoms=None, kpts=(1, 1, 1),
@@ -76,9 +140,14 @@ class DFTBUmbrellaCalculator(DFTB):
                          **kwargs)
 
         self.configuration = configuration
-        self.atoms = atoms
         self.kpts = kpts
+        logger.info(f'kpts: {self.kpts}')
         self.Hamiltonian_Charge = Hamiltonian_Charge
+        self.coord_type = coord_type
+        self.coordinate = coordinate
+        self.spring_const = spring_const
+        self.reference = reference
+        self.save_forces = save_forces
 
 
 class GAPUmbrellaCalculator(Calculator):
@@ -141,7 +210,6 @@ class GAPUmbrellaCalculator(Calculator):
         if self.save_forces:
             force_vec = bias[self.coordinate[0]]
             force_magnitude = np.linalg.norm(force_vec)
-            logger.info(f'Force magnitude: {force_magnitude}')
 
             with open('spring_force.txt', 'a') as outfile:
                 print(f'{force_magnitude}', file=outfile)
@@ -175,7 +243,8 @@ class UmbrellaSampling:
     umbrella sampling in windows and running WHAM analysis using PyWham
     """
 
-    def generate_pulling_configs(self, temp=None, dt=None, interval=None,
+    def generate_pulling_configs(self, temp=None, dt=None,
+                                 interval=None,
                                  pulling_rate=None, final_value=None,
                                  save_forces=True, **kwargs):
         """Generates an MD trajectory along a reaction coordinate
@@ -210,15 +279,29 @@ class UmbrellaSampling:
         logger.info(f'Running pulling simulation for'
                     f' {self.simulation_time:.0f} fs')
 
-        traj = run_umbrella_gapmd(configuration=self.init_config,
-                                  umbrella_gap=self.umbrella_gap,
-                                  temp=temp,
-                                  dt=dt,
-                                  interval=interval,
-                                  distance=distance,
-                                  pulling_rate=pulling_rate,
-                                  save_forces=save_forces,
-                                  **kwargs)
+        if self.method == 'gap':
+
+            traj = run_umbrella_gapmd(configuration=self.init_config,
+                                      umbrella_gap=self.umbrella_gap,
+                                      temp=temp,
+                                      dt=dt,
+                                      interval=interval,
+                                      distance=distance,
+                                      pulling_rate=pulling_rate,
+                                      save_forces=save_forces,
+                                      **kwargs)
+
+        elif self.method == 'dftb':
+
+            traj = run_umbrella_dftbmd(configuration=self.init_config,
+                                       ase_atoms=self.ase_atoms,
+                                       temp=temp,
+                                       dt=dt,
+                                       interval=interval,
+                                       distance=distance,
+                                       pulling_rate=pulling_rate,
+                                       save_forces=save_forces,
+                                       **kwargs)
 
         traj.save('pulling_traj.xyz')
 
@@ -277,30 +360,48 @@ class UmbrellaSampling:
 
             # Repeating the calculation above to get distances
             window_atoms = frame.ase_atoms()
-
-            self.umbrella_gap.reference = window_atoms.get_distance(
-                self.coordinate[0],
-                self.coordinate[1],
-                mic=True)
-
             logger.info(f'Running umbrella sampling')
-            logger.info(f'Window {window} with reference '
-                        f'{self.umbrella_gap.reference:.2f} Å')
 
-            traj = run_umbrella_gapmd(configuration=frame,
-                                      umbrella_gap=self.umbrella_gap,
-                                      temp=temp,
-                                      dt=dt,
-                                      interval=interval,
-                                      **kwargs)
+            if self.method == 'gap':
+
+                self.umbrella_gap.reference = window_atoms.get_distance(
+                    self.coordinate[0],
+                    self.coordinate[1],
+                    mic=True)
+                logger.info(f'Window {window} with reference '
+                            f'{self.umbrella_gap.reference:.2f} Å')
+
+                traj = run_umbrella_gapmd(configuration=frame,
+                                          umbrella_gap=self.umbrella_gap,
+                                          temp=temp,
+                                          dt=dt,
+                                          interval=interval,
+                                          **kwargs)
+
+            elif self.method == 'dftb':
+                self.umbrella_dftb.reference = window_atoms.get_distance(
+                    self.coordinate[0],
+                    self.coordinate[1],
+                    mic=True)
+                logger.info(f'Window {window} with reference '
+                            f'{self.umbrella_dftb.reference:.2f} Å')
+
+                traj = run_umbrella_dftbmd(configuration=frame,
+                                           ase_atoms=self.ase_atoms,
+                                           temp=temp,
+                                           dt=dt,
+                                           interval=interval,
+                                           **kwargs)
 
             combined_traj += traj
 
             with open(f'window_{window}.txt', 'w') as outfile:
                 for configuration in traj:
+                    logger.info(f'{configuration.energy},'
+                                f'{configuration.rxn_coord}')
                     print(f'{configuration.energy}',
                           f'{configuration.rxn_coord}',
-                          f'{self.umbrella_gap.reference}', file=outfile)
+                          f'{self.umbrella_dftb.reference}', file=outfile)
 
         combined_traj.save(filename='combined_windows.xyz')
 
@@ -416,12 +517,15 @@ class UmbrellaSampling:
         with open("wham.spec.xml", "w") as f:
             f.write(xml_string)
 
-    def __init__(self, init_config=None, gap=None, coordinate=None,
-                 spring_const=None):
+    def __init__(self, init_config=None, method=None, gap=None,
+                 coordinate=None, spring_const=None):
         """
-        :param init_config: (gaptrain.configurations.Configuration)
+        :param init_config: (gaptrain.configurations.Configuration | None)
 
-        :param gap: (gaptrain.gap.GAP)
+        :param method: (str | None) Method to calculate energy and forces. Must
+                       be in ['dftb', 'gap]
+
+        :param gap: (gaptrain.gap.GAP | None)
 
         :param coordinate: (list | None) Indices of the atoms which define the
                            reaction coordinate
@@ -432,8 +536,8 @@ class UmbrellaSampling:
 
         if len(coordinate) == 2:
             self.coord_type = 'distance'
-            ase_atoms = init_config.ase_atoms()
-            self.reference = ase_atoms.get_distance(coordinate[0],
+            _atoms = init_config.ase_atoms()
+            self.reference = _atoms.get_distance(coordinate[0],
                                                     coordinate[1], mic=True)
         elif len(coordinate) == 4:
             self.coord_type = 'torsion'
@@ -444,15 +548,32 @@ class UmbrellaSampling:
                              "coordinates")
 
         self.spring_const = spring_const
-        self.umbrella_gap = UmbrellaGAP(name=gap.name,
-                                        system=gap.system,
-                                        coord_type=self.coord_type,
-                                        coordinate=coordinate,
-                                        spring_const=self.spring_const,
-                                        reference=self.reference)
-
+        self.method = method
         self.init_config = init_config
-        self.gap = gap
+
+        if method == 'gap':
+            self.gap = gap
+            self.umbrella_gap = UmbrellaGAP(name=gap.name,
+                                            system=gap.system,
+                                            coord_type=self.coord_type,
+                                            coordinate=coordinate,
+                                            spring_const=self.spring_const,
+                                            reference=self.reference)
+        elif method == 'dftb':
+            self.ase_atoms = init_config.ase_atoms()
+            # pulling force not specified in this class
+            self.umbrella_dftb = DFTBUmbrellaCalculator(configuration=self.init_config,
+                                                   kpts=(1, 1, 1),
+                                                   Hamiltonian_Charge=self.init_config.charge,
+                                                   coord_type=self.coord_type,
+                                                   coordinate=coordinate,
+                                                   spring_const=self.spring_const,
+                                                   reference=self.reference)
+            self.ase_atoms.set_calculator(self.umbrella_dftb)
+
+        else:
+            raise ValueError("Method must be in ['dftb', 'gap]")
+
         self.coordinate = coordinate
         self.final_value = None
         self.pulling_rate = None

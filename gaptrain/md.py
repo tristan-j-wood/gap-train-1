@@ -4,6 +4,10 @@ from gaptrain.calculators import DFTB
 from gaptrain.utils import work_in_tmp_dir
 from gaptrain.log import logger
 from gaptrain.gtconfig import GTConfig
+from gaptrain.umbrella import RxnCoordinateAtoms
+from ase.io.trajectory import Trajectory as AseTrajectory
+from ase.md.langevin import Langevin
+from ase import units
 from subprocess import Popen, PIPE
 import subprocess
 import numpy as np
@@ -392,14 +396,11 @@ def run_gapmd(configuration, gap, temp, dt, interval, init_temp=None, **kwargs):
     return traj
 
 
-def run_umbrella_dftbmd(configuration, temp, dt, interval, **kwargs):
+@work_in_tmp_dir(kept_exts=['.txt'])
+def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
+                       init_temp=None, distance=None, pulling_rate=None,
+                       save_forces=False, **kwargs):
     """
-    Run ab-initio molecular dynamics on a system. To run a 10 ps simulation
-    with a timestep of 0.5 fs saving every 10th step at 300K
-
-    run_umbrellamd(config, temp=300, dt=0.5, interval=10, ps=10)
-
-    ---------------------------------------------------------------------------
     :param configuration: (gaptrain.configurations.Configuration)
 
     :param temp: (float) Temperature in K to use
@@ -415,53 +416,61 @@ def run_umbrella_dftbmd(configuration, temp, dt, interval, **kwargs):
         raise ValueError('Failed to run DFTB+. Executable not found ')
 
     logger.info('Running Umbrella Sampling DFTB+ MD')
-    ase_atoms = configuration.ase_atoms()
+
+    if ('ps' and 'ns' and 'fs') not in kwargs:
+        time = {'fs': distance / pulling_rate}
+        n_steps = simulation_steps(dt, time)
+    else:
+        n_steps = simulation_steps(dt, kwargs)
 
     if 'n_cores' in kwargs:
         os.environ['OMP_NUM_THREADS'] = str(kwargs['n_cores'])
     else:
         os.environ['OMP_NUM_THREADS'] = str(GTConfig.n_cores)
 
-    umbrella = Umbrella(configuration=configuration, atoms=ase_atoms,
-                        kpts=(1, 1, 1),
-                        Hamiltonian_Charge=configuration.charge)
-    umbrella = UmbrellaCalculator(umbrella)
-    ase_atoms.set_calculator(umbrella)
-
-    # Do a single point energy evaluation to make sure the calculation works.
-    # also to generate the input file which can be modified
     try:
         ase_atoms.get_potential_energy()
 
     except ValueError:
         raise Exception('DFTB+ failed to calculate the first point')
 
-    # Need to add the DFTB ase calculator to run dynamics as currently the
-    # energy and forces are not modified.
+    configuration.save(filename='config.xyz')
+    a, b, c = configuration.box.size
+    system = ase_atoms
+    system.cell = [a, b, b]
+    system.pbc = True
+    system.center()
+    system = RxnCoordinateAtoms(system)
+    traj = AseTrajectory("tmp.traj", 'w', system)
 
-    # Append to the generated input file
-    with open('dftb_in.hsd', 'a') as input_file:
+    def print_energy(atoms=system):
+        with open("tmp_energies.txt", "w") as outfile:
+            print(f'{atoms.get_potential_energy()}\n', file=outfile)
 
-        print('Driver = VelocityVerlet{',
-              f'  TimeStep [fs] = {dt}',
-              '  Thermostat = NoseHoover {',
-              f'    Temperature [Kelvin] = {temp}',
-              '    CouplingStrength [cm^-1] = 3200',
-              '  }',
-              f'  Steps = {simulation_steps(dt, kwargs)}',
-              '  MovedAtoms = 1:-1',
-              f'  MDRestartFrequency = {interval}',
-              '}', sep='\n', file=input_file)
+    def print_rxn_coord(atoms=system):
+        coordinate = atoms.calc.coordinate
+        with open("tmp_rxn_coord.txt", "w") as outfile:
+            print(f'{atoms.get_rxn_coords(coordinate)}\n', file=outfile)
 
-    with open('dftb_md.out', 'w') as output_file:
-        process = Popen([dftb_path],
-                        shell=False, stderr=PIPE, stdout=output_file)
-        _, err = process.communicate()
+    def update_reference(pulling_rate=pulling_rate):
+        # ase_atoms or system to change?
+        ase_atoms.calc.reference += pulling_rate
 
-    if len(err) > 0:
-        logger.error(f'DFTB MD: {err.decode()}')
+    dyn = Langevin(system, dt * units.fs, temp * units.kB, 0.02)
 
-    return Trajectory('geo_end.xyz', init_configuration=configuration)
+    dyn.attach(print_energy, interval=interval)
+    dyn.attach(print_rxn_coord, interval=interval)
+    dyn.attach(traj.write, interval=interval)
+
+    if pulling_rate is not None:
+        dyn.attach(update_reference, interval=1//dt)
+
+    if save_forces:
+        ase_atoms.calc.save_forces = True
+
+    dyn.run(steps=n_steps)
+
+    return Trajectory('tmp.traj', init_configuration=configuration)
 
 
 @work_in_tmp_dir(copied_exts=['.xml'], kept_exts=['.txt'])
