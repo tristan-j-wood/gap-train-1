@@ -4,10 +4,6 @@ from gaptrain.calculators import DFTB
 from gaptrain.utils import work_in_tmp_dir
 from gaptrain.log import logger
 from gaptrain.gtconfig import GTConfig
-from gaptrain.umbrella import RxnCoordinateAtoms
-from ase.io.trajectory import Trajectory as AseTrajectory
-from ase.md.langevin import Langevin
-from ase import units
 from subprocess import Popen, PIPE
 import subprocess
 import numpy as np
@@ -396,6 +392,12 @@ def run_gapmd(configuration, gap, temp, dt, interval, init_temp=None, **kwargs):
     return traj
 
 
+def print_energy(atoms):
+    with open("tmp_energies.txt", "w") as outfile:
+        logger.info(f'Energy: {atoms.get_potential_energy()}')
+        print(f'{atoms.get_potential_energy()}', file=outfile)
+
+
 @work_in_tmp_dir(kept_exts=['.txt'])
 def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
                        init_temp=None, distance=None, pulling_rate=None,
@@ -434,6 +436,11 @@ def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
     except ValueError:
         raise Exception('DFTB+ failed to calculate the first point')
 
+    from gaptrain.umbrella import RxnCoordinateAtoms
+    from ase.io.trajectory import Trajectory as AseTrajectory
+    from ase.md.langevin import Langevin
+    from ase import units
+
     configuration.save(filename='config.xyz')
     a, b, c = configuration.box.size
     system = ase_atoms
@@ -443,14 +450,11 @@ def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
     system = RxnCoordinateAtoms(system)
     traj = AseTrajectory("tmp.traj", 'w', system)
 
-    def print_energy(atoms=system):
-        with open("tmp_energies.txt", "w") as outfile:
-            print(f'{atoms.get_potential_energy()}\n', file=outfile)
-
     def print_rxn_coord(atoms=system):
         coordinate = atoms.calc.coordinate
         with open("tmp_rxn_coord.txt", "w") as outfile:
-            print(f'{atoms.get_rxn_coords(coordinate)}\n', file=outfile)
+            logger.info(f'Coordinate: {atoms.get_rxn_coords(coordinate)}')
+            print(f'{atoms.get_rxn_coords(coordinate)}', file=outfile)
 
     def update_reference(pulling_rate=pulling_rate):
         # ase_atoms or system to change?
@@ -458,7 +462,7 @@ def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
 
     dyn = Langevin(system, dt * units.fs, temp * units.kB, 0.02)
 
-    dyn.attach(print_energy, interval=interval)
+    dyn.attach(print_energy, atoms=system, interval=interval)
     dyn.attach(print_rxn_coord, interval=interval)
     dyn.attach(traj.write, interval=interval)
 
