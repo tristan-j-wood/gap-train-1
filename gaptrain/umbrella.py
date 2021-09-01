@@ -355,8 +355,8 @@ class UmbrellaSampling:
             self.pulling_rate = pulling_rate
 
             if self.pulling_rate is not None:
-                logger.warning("Pulling rate is not None for umbrella sampling"
-                               " simulations!")
+                logger.error("Pulling rate must be None for umbrella "
+                             "sampling simulations!")
 
             # Repeating the calculation above to get distances
             window_atoms = frame.ase_atoms()
@@ -386,23 +386,22 @@ class UmbrellaSampling:
                 logger.info(f'Window {window} with reference '
                             f'{self.umbrella_dftb.reference:.2f} Å')
 
+                # Do I need to set the calculator again for ase atoms
+                window_atoms.set_calculator(self.umbrella_dftb)
                 traj = run_umbrella_dftbmd(configuration=frame,
-                                           ase_atoms=self.ase_atoms,
+                                           ase_atoms=window_atoms,
                                            temp=temp,
                                            dt=dt,
                                            interval=interval,
                                            **kwargs)
 
-            combined_traj += traj
-
             with open(f'window_{window}.txt', 'w') as outfile:
                 for configuration in traj:
-                    logger.info(f'{configuration.energy},'
-                                f'{configuration.rxn_coord}')
                     print(f'{configuration.energy}',
                           f'{configuration.rxn_coord}',
                           f'{self.umbrella_dftb.reference}', file=outfile)
 
+        combined_traj += traj
         combined_traj.save(filename='combined_windows.xyz')
 
         return None

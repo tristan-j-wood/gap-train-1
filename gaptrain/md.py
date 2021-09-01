@@ -392,12 +392,6 @@ def run_gapmd(configuration, gap, temp, dt, interval, init_temp=None, **kwargs):
     return traj
 
 
-def print_energy(atoms):
-    with open("tmp_energies.txt", "w") as outfile:
-        logger.info(f'Energy: {atoms.get_potential_energy()}')
-        print(f'{atoms.get_potential_energy()}', file=outfile)
-
-
 @work_in_tmp_dir(kept_exts=['.txt'])
 def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
                        init_temp=None, distance=None, pulling_rate=None,
@@ -441,7 +435,7 @@ def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
     from ase.md.langevin import Langevin
     from ase import units
 
-    configuration.save(filename='config.xyz')
+    # configuration.save(filename='config.xyz')
     a, b, c = configuration.box.size
     system = ase_atoms
     system.cell = [a, b, b]
@@ -450,15 +444,19 @@ def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
     system = RxnCoordinateAtoms(system)
     traj = AseTrajectory("tmp.traj", 'w', system)
 
+    def print_energy(atoms):
+        with open("tmp_energies.txt", "a") as outfile:
+            print(f'{atoms.get_potential_energy()}', file=outfile)
+
     def print_rxn_coord(atoms=system):
         coordinate = atoms.calc.coordinate
-        with open("tmp_rxn_coord.txt", "w") as outfile:
-            logger.info(f'Coordinate: {atoms.get_rxn_coords(coordinate)}')
+        with open("tmp_rxn_coord.txt", "a") as outfile:
+            # logger.info(f'md.py: {atoms.get_rxn_coords(coordinate)}')
             print(f'{atoms.get_rxn_coords(coordinate)}', file=outfile)
 
     def update_reference(pulling_rate=pulling_rate):
-        # ase_atoms or system to change?
-        ase_atoms.calc.reference += pulling_rate
+        logger.info(f'system reference: {system.calc.reference:.2f}')
+        system.calc.reference += pulling_rate
 
     dyn = Langevin(system, dt * units.fs, temp * units.kB, 0.02)
 
@@ -470,7 +468,7 @@ def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
         dyn.attach(update_reference, interval=1//dt)
 
     if save_forces:
-        ase_atoms.calc.save_forces = True
+        system.calc.save_forces = True
 
     dyn.run(steps=n_steps)
 
