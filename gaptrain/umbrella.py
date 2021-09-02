@@ -395,13 +395,23 @@ class UmbrellaSampling:
                                            interval=interval,
                                            **kwargs)
 
+            # grossman wham
             with open(f'window_{window}.txt', 'w') as outfile:
-                for configuration in traj:
-                    print(f'{configuration.energy}',
+                # NEED TO MAKE REFERENCE WORK FOR BOTH DFTB AND GAP
+                print(f'# {self.umbrella_gap.reference}', file=outfile)
+                for i, configuration in enumerate(traj):
+                    print(f'{i}',
                           f'{configuration.rxn_coord}',
-                          f'{self.umbrella_dftb.reference}', file=outfile)
+                          f'{configuration.energy}', file=outfile)
 
-        combined_traj += traj
+            # pywham
+            # with open(f'window_{window}.txt', 'w') as outfile:
+            #     for configuration in traj:
+            #         print(f'{configuration.energy}',
+            #               f'{configuration.rxn_coord}',
+            #               f'{self.umbrella_dftb.reference}', file=outfile)
+
+            combined_traj += traj
         combined_traj.save(filename='combined_windows.xyz')
 
         return None
@@ -415,16 +425,50 @@ class UmbrellaSampling:
 
         temps = [temp for _ in range(self.num_windows)]
 
-        self._write_xml_file(energy_interval=energy_interval,
-                             energy_begin=None, energy_end=None,
-                             coord_begin=None, coord_end=None,
-                             coord_interval=coord_interval, temp=temps,
-                             temp_interval=temp_interval, file_names=file_list,
-                             energy_function=energy_function)
+        use_grossman = True
+        if use_grossman:
 
-        os.system("python2 wham.py wham.spec.xml")
+            self._write_metafile(file_list, temp)
+
+            # add these as custom arguments
+            # CHECK UNITS IN GROSSMAN WHAM ETC, botlzman etc
+            hist_min = 0
+            hist_max = 8
+            num_bins = 20
+            tol = 0.00005
+            numpad = 0
+            metadatafile = 'metadata.txt'
+            freefile = 'free_energy.txt'
+
+            os.system(f'/u/fd/quee3757/repos/wham/wham/wham {hist_min} {hist_max} {num_bins} {tol} '
+                      f'{temp} {numpad} {metadatafile} {freefile}')
+
+        use_pywham = False
+        if use_pywham:
+
+            self._write_xml_file(energy_interval=energy_interval,
+                                 energy_begin=None, energy_end=None,
+                                 coord_begin=None, coord_end=None,
+                                 coord_interval=coord_interval, temp=temps,
+                                 temp_interval=temp_interval,
+                                 file_names=file_list,
+                                 energy_function=energy_function)
+
+            os.system("python2 wham.py wham.spec.xml")
 
         return None
+
+    def _write_metafile(self, file_names, temp):
+        with open('metadata.txt', 'w') as outfile:
+
+            for file in file_names:
+                with open(file, 'r') as infile:
+                    ref = infile.readline().split()[1]
+
+                    print(f'{file} '
+                          f'{ref} ' 
+                          f'{self.spring_const} '
+                          f'{temp}', file=outfile)
 
     def _write_xml_file(self, energy_interval, coord_interval, temp,
                         temp_interval, file_names, energy_function,
