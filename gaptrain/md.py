@@ -394,10 +394,12 @@ def run_gapmd(configuration, gap, temp, dt, interval, init_temp=None, **kwargs):
 
 @work_in_tmp_dir(kept_exts=['.txt'])
 def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
-                       init_temp=None, distance=None, pulling_rate=None,
-                       save_forces=False, **kwargs):
+                        distance=None, pulling_rate=None, save_forces=False,
+                        **kwargs):
     """
     :param configuration: (gaptrain.configurations.Configuration)
+
+    :param ase_atoms: (ase.atoms.Atoms)
 
     :param temp: (float) Temperature in K to use
 
@@ -405,8 +407,26 @@ def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
 
     :param interval: (int) Interval between printing the geometry
 
-    :param kwargs: {fs, ps, ns} Simulation time in some units
+    :param distance: (float | None) Distance in Å to pull the system apart,
+                     starting from the reference value
+
+    :param pulling_rate: (float | None) Rate in Å /fs at which the pull the
+                         system apart. If None, no pulling will occur
+
+    :param save_forces: (bool) If True, magnitude of force on spring are
+                    saved to a spring_forces.txt file at each interval
+    -------------------------------------------------
+    Keyword Arguments:
+
+        {fs, ps, ns}: Simulation time in some units
+
+    :returns: (gt.Trajectory)
     """
+    from gaptrain.umbrella import RxnCoordinateAtoms
+    from ase.io.trajectory import Trajectory as AseTrajectory
+    from ase.md.langevin import Langevin
+    from ase import units
+
     dftb_path = os.getenv('DFTB_COMMAND', shutil.which('dftb+'))
     if dftb_path is None:
         raise ValueError('Failed to run DFTB+. Executable not found ')
@@ -430,12 +450,6 @@ def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
     except ValueError:
         raise Exception('DFTB+ failed to calculate the first point')
 
-    from gaptrain.umbrella import RxnCoordinateAtoms
-    from ase.io.trajectory import Trajectory as AseTrajectory
-    from ase.md.langevin import Langevin
-    from ase import units
-
-    # configuration.save(filename='config.xyz')
     a, b, c = configuration.box.size
     system = ase_atoms
     system.cell = [a, b, b]
@@ -451,11 +465,9 @@ def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
     def print_rxn_coord(atoms=system):
         coordinate = atoms.calc.coordinate
         with open("tmp_rxn_coord.txt", "a") as outfile:
-            # logger.info(f'md.py: {atoms.get_rxn_coords(coordinate)}')
             print(f'{atoms.get_rxn_coords(coordinate)}', file=outfile)
 
     def update_reference(pulling_rate=pulling_rate):
-        logger.info(f'system reference: {system.calc.reference:.2f}')
         system.calc.reference += pulling_rate
 
     dyn = Langevin(system, dt * units.fs, temp * units.kB, 0.02)
@@ -464,6 +476,8 @@ def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
     dyn.attach(print_rxn_coord, interval=interval)
     dyn.attach(traj.write, interval=interval)
 
+    # Currently only value for integer values of 1/dt and error
+    # may compound
     if pulling_rate is not None:
         dyn.attach(update_reference, interval=1//dt)
 

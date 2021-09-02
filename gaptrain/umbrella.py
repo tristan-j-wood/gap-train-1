@@ -104,7 +104,6 @@ class DFTBUmbrellaCalculator(DFTB):
         dftb_atoms.set_calculator(dftb_calc)
 
         bias = self._calculate_energy_bias(dftb_atoms)
-
         energy = dftb_atoms.get_potential_energy() + bias
 
         return energy
@@ -141,7 +140,6 @@ class DFTBUmbrellaCalculator(DFTB):
 
         self.configuration = configuration
         self.kpts = kpts
-        logger.info(f'kpts: {self.kpts}')
         self.Hamiltonian_Charge = Hamiltonian_Charge
         self.coord_type = coord_type
         self.coordinate = coordinate
@@ -280,7 +278,6 @@ class UmbrellaSampling:
                     f' {self.simulation_time:.0f} fs')
 
         if self.method == 'gap':
-
             traj = run_umbrella_gapmd(configuration=self.init_config,
                                       umbrella_gap=self.umbrella_gap,
                                       temp=temp,
@@ -292,7 +289,6 @@ class UmbrellaSampling:
                                       **kwargs)
 
         elif self.method == 'dftb':
-
             traj = run_umbrella_dftbmd(configuration=self.init_config,
                                        ase_atoms=self.ase_atoms,
                                        temp=temp,
@@ -313,7 +309,22 @@ class UmbrellaSampling:
         Performs umbrella sampling under a harmonic bias in windows
         generated from the pulling trajectory
 
+        :param traj: (gaptrain.trajectories.Trajectory)
+
+        :param temp: (float) Temperature in K to use
+
+        :param dt: (float) Timestep in fs
+
+        :param interval: (int) Interval between printing the geometry
+
         :param num_windows: (int) Number of umbrella sampling windows to run
+
+        :param pulling_rate: (float | None) Rate in Å /fs at which the pull the
+                             system apart. If None, no pulling will occur
+        -------------------------------------------------
+        Keyword Arguments:
+
+            {fs, ps, ns}: Simulation time in some units
         """
 
         if ('ps' and 'ns' and 'fs') not in kwargs:
@@ -327,47 +338,48 @@ class UmbrellaSampling:
         distance = self.final_value - init_value
         distance_intervals = distance / (self.num_windows - 1)
 
+        # Get a dictonary of reaction coordinate distances for each frame
         traj_dists = {}
-        for i, frame in enumerate(traj):
+        for index, frame in enumerate(traj):
             frame_atoms = frame.ase_atoms()
-
             dist = frame_atoms.get_distance(self.coordinate[0],
                                             self.coordinate[1],
                                             mic=True)
-            traj_dists[i] = dist
+            traj_dists[index] = dist
 
+        # Get the initial configurations used in the umbrella sampling windows
         umbrella_frames = Data()
         for _ in range(self.num_windows):
             window_dists = deepcopy(traj_dists)
 
-            for key, value in window_dists.items():
-                window_dists[key] = abs(value - init_value)
+            for frame_key, dist_value in window_dists.items():
+                window_dists[frame_key] = abs(dist_value - init_value)
 
-            index = min(window_dists.keys(), key=window_dists.get)
+            traj_index = min(window_dists.keys(), key=window_dists.get)
             init_value += distance_intervals
 
-            umbrella_frames.add(traj[index])
+            umbrella_frames.add(traj[traj_index])
 
         combined_traj = Data()
+
         # paralellise this but watch out for self.variables
         for window, frame in enumerate(umbrella_frames):
-
             self.pulling_rate = pulling_rate
 
             if self.pulling_rate is not None:
                 logger.error("Pulling rate must be None for umbrella "
                              "sampling simulations!")
 
-            # Repeating the calculation above to get distances
             window_atoms = frame.ase_atoms()
             logger.info(f'Running umbrella sampling')
 
-            if self.method == 'gap':
+            window_reference = window_atoms.get_distance(self.coordinate[0],
+                                                         self.coordinate[1],
+                                                         mic=True)
 
-                self.umbrella_gap.reference = window_atoms.get_distance(
-                    self.coordinate[0],
-                    self.coordinate[1],
-                    mic=True)
+            if self.method == 'gap':
+                self.umbrella_gap.reference = window_reference
+
                 logger.info(f'Window {window} with reference '
                             f'{self.umbrella_gap.reference:.2f} Å')
 
@@ -379,14 +391,11 @@ class UmbrellaSampling:
                                           **kwargs)
 
             elif self.method == 'dftb':
-                self.umbrella_dftb.reference = window_atoms.get_distance(
-                    self.coordinate[0],
-                    self.coordinate[1],
-                    mic=True)
+                self.umbrella_dftb.reference = window_reference
+
                 logger.info(f'Window {window} with reference '
                             f'{self.umbrella_dftb.reference:.2f} Å')
 
-                # Do I need to set the calculator again for ase atoms
                 window_atoms.set_calculator(self.umbrella_dftb)
                 traj = run_umbrella_dftbmd(configuration=frame,
                                            ase_atoms=window_atoms,
@@ -395,56 +404,55 @@ class UmbrellaSampling:
                                            interval=interval,
                                            **kwargs)
 
-            # grossman wham
             with open(f'window_{window}.txt', 'w') as outfile:
-                # NEED TO MAKE REFERENCE WORK FOR BOTH DFTB AND GAP
-                print(f'# {self.umbrella_gap.reference}', file=outfile)
-                for i, configuration in enumerate(traj):
-                    print(f'{i}',
-                          f'{configuration.rxn_coord}',
-                          f'{configuration.energy}', file=outfile)
 
-            # pywham
-            # with open(f'window_{window}.txt', 'w') as outfile:
-            #     for configuration in traj:
-            #         print(f'{configuration.energy}',
-            #               f'{configuration.rxn_coord}',
-            #               f'{self.umbrella_dftb.reference}', file=outfile)
+                if self.wham_method == 'grossman':
+                    print(f'# {window_reference}', file=outfile)
+                    for i, configuration in enumerate(traj):
+                        print(f'{i}',
+                              f'{configuration.rxn_coord}',
+                              f'{configuration.energy}', file=outfile)
+
+                elif self.wham_method == 'pywham':
+                    for configuration in traj:
+                        print(f'{configuration.energy}',
+                              f'{configuration.rxn_coord}',
+                              f'{self.umbrella_dftb.reference}', file=outfile)
 
             combined_traj += traj
+
         combined_traj.save(filename='combined_windows.xyz')
 
         return None
 
-    def run_wham_analysis(self, temp, energy_interval, coord_interval,
-                          energy_function, temp_interval=0.1):
+    def run_wham_analysis(self, temp, num_bins=30, tol=0.00001, numpad=0,
+                          wham_path=None, energy_interval=None,
+                          coord_interval=None, energy_function=None,
+                          temp_interval=0.1):
         """Calculates the Gibbs free energy using the WHAM method"""
 
-        logger.info(f'{self.num_windows}')
-        file_list = [f'window_{i}.txt' for i in range(self.num_windows)]
+        assert wham_path is not None
 
+        file_list = [f'window_{i}.txt' for i in range(self.num_windows)]
         temps = [temp for _ in range(self.num_windows)]
 
-        use_grossman = True
-        if use_grossman:
+        if self.wham_method == 'grossman':
 
-            self._write_metafile(file_list, temp)
-
-            # add these as custom arguments
             # CHECK UNITS IN GROSSMAN WHAM ETC, botlzman etc
-            hist_min = 0
-            hist_max = 8
-            num_bins = 20
-            tol = 0.00005
-            numpad = 0
+            hist_min = self.reference
+            hist_max = self.final_value
             metadatafile = 'metadata.txt'
             freefile = 'free_energy.txt'
 
-            os.system(f'/u/fd/quee3757/repos/wham/wham/wham {hist_min} {hist_max} {num_bins} {tol} '
+            self._write_metafile(file_list, temp)
+
+            logger.warning('Ensure that the units in the Grossman WHAM '
+                           'implementation are in eV')
+
+            os.system(f'{wham_path} {hist_min} {hist_max} {num_bins} {tol} '
                       f'{temp} {numpad} {metadatafile} {freefile}')
 
-        use_pywham = False
-        if use_pywham:
+        if self.wham_method == 'pywham':
 
             self._write_xml_file(energy_interval=energy_interval,
                                  energy_begin=None, energy_end=None,
@@ -561,7 +569,7 @@ class UmbrellaSampling:
             f.write(xml_string)
 
     def __init__(self, init_config=None, method=None, gap=None,
-                 coordinate=None, spring_const=None):
+                 coordinate=None, spring_const=None, wham_method='grossman'):
         """
         :param init_config: (gaptrain.configurations.Configuration | None)
 
@@ -575,13 +583,16 @@ class UmbrellaSampling:
 
         :param spring_const: (float | None) Value of the spring constant, K,
                               used in umbrella sampling
+
+        :param wham_method: (str) Method to use when performing WHAM. PyWham
+                    and Grossman Wham currently implemented.
         """
 
         if len(coordinate) == 2:
             self.coord_type = 'distance'
             _atoms = init_config.ase_atoms()
             self.reference = _atoms.get_distance(coordinate[0],
-                                                    coordinate[1], mic=True)
+                                                 coordinate[1], mic=True)
         elif len(coordinate) == 4:
             self.coord_type = 'torsion'
         elif isinstance(coordinate, gaptrain.configurations.Configuration):
@@ -604,21 +615,27 @@ class UmbrellaSampling:
                                             reference=self.reference)
         elif method == 'dftb':
             self.ase_atoms = init_config.ase_atoms()
-            # pulling force not specified in this class
-            self.umbrella_dftb = DFTBUmbrellaCalculator(configuration=self.init_config,
-                                                   kpts=(1, 1, 1),
-                                                   Hamiltonian_Charge=self.init_config.charge,
-                                                   coord_type=self.coord_type,
-                                                   coordinate=coordinate,
-                                                   spring_const=self.spring_const,
-                                                   reference=self.reference)
+
+            self.umbrella_dftb = DFTBUmbrellaCalculator(
+                                 configuration=self.init_config,
+                                 kpts=(1, 1, 1),
+                                 Hamiltonian_Charge=self.init_config.charge,
+                                 coord_type=self.coord_type,
+                                 coordinate=coordinate,
+                                 spring_const=self.spring_const,
+                                 reference=self.reference)
+
             self.ase_atoms.set_calculator(self.umbrella_dftb)
 
         else:
             raise ValueError("Method must be in ['dftb', 'gap]")
+
+        assert wham_method in ['grossman', 'pywham']
+        self.wham_method = wham_method
 
         self.coordinate = coordinate
         self.final_value = None
         self.pulling_rate = None
         self.num_windows = None
         self.simulation_time = None
+
