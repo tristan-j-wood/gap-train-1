@@ -392,7 +392,7 @@ def run_gapmd(configuration, gap, temp, dt, interval, init_temp=None, **kwargs):
     return traj
 
 
-@work_in_tmp_dir(kept_exts=['.txt'])
+# @work_in_tmp_dir(kept_exts=['.txt'])
 def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
                         distance=None, pulling_rate=None, save_forces=False,
                         **kwargs):
@@ -481,6 +481,8 @@ def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
     if pulling_rate is not None:
         dyn.attach(update_reference, interval=1//dt)
 
+    # Currently calls this function whenever forces is called, which
+    # may or may not be every step of the simulation
     if save_forces:
         system.calc.save_forces = True
 
@@ -611,6 +613,8 @@ def run_umbrella_gapmd(configuration, umbrella_gap, temp, dt, interval,
               # may compound
               f'if {pulling_rate} is not None:'
               f'    dyn.attach(update_reference, interval={1//dt})',
+              # Currently calls this function whenever forces is called, which
+              # may or may not be every step of the simulation
               f'if {save_forces}:',
               f'    pot.save_forces = True',
               f'dyn.run(steps={n_steps})',

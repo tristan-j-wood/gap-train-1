@@ -129,18 +129,17 @@ class DFTBUmbrellaCalculator(DFTB):
 
         return forces
 
-    def __init__(self, configuration=None, kpts=None,
-                 Hamiltonian_Charge=None, coord_type=None, coordinate=None,
-                 spring_const=None, reference=None, save_forces=False,
-                 **kwargs):
+    def __init__(self, configuration=None, kpts=None, coord_type=None,
+                 coordinate=None, spring_const=None, reference=None,
+                 save_forces=False, **kwargs):
         super().__init__(restart=None,
                          label='dftb', atoms=None, kpts=(1, 1, 1),
-                         slako_dir=None,
-                         **kwargs)
+                         slako_dir=None, **kwargs)
+
+        logger.info(f'{kwargs}')
 
         self.configuration = configuration
         self.kpts = kpts
-        self.Hamiltonian_Charge = Hamiltonian_Charge
         self.coord_type = coord_type
         self.coordinate = coordinate
         self.spring_const = spring_const
@@ -267,10 +266,12 @@ class UmbrellaSampling:
         self.final_value = final_value
         self.pulling_rate = pulling_rate
         distance = final_value - self.reference
+
         self.simulation_time = distance / self.pulling_rate
 
         if self.simulation_time < 100:
-            logger.warning(f'Simulation time = {self.simulation_time} <100 fs!'
+            logger.warning(f'Simulation time = {self.simulation_time:.1f}'
+                           f' < 100 fs!'
                            f' Decrease pulling rate or increase distance'
                            f' to increase simulation time')
 
@@ -438,7 +439,6 @@ class UmbrellaSampling:
 
         if self.wham_method == 'grossman':
 
-            # CHECK UNITS IN GROSSMAN WHAM ETC, botlzman etc
             hist_min = self.reference
             hist_max = self.final_value
             metadatafile = 'metadata.txt'
@@ -591,8 +591,12 @@ class UmbrellaSampling:
         if len(coordinate) == 2:
             self.coord_type = 'distance'
             _atoms = init_config.ase_atoms()
+
             self.reference = _atoms.get_distance(coordinate[0],
                                                  coordinate[1], mic=True)
+            logger.info(f'Initial value of umbrella sampling:'
+                        f' {self.reference:.2f}')
+
         elif len(coordinate) == 4:
             self.coord_type = 'torsion'
         elif isinstance(coordinate, gaptrain.configurations.Configuration):
@@ -607,23 +611,25 @@ class UmbrellaSampling:
 
         if method == 'gap':
             self.gap = gap
+
             self.umbrella_gap = UmbrellaGAP(name=gap.name,
                                             system=gap.system,
                                             coord_type=self.coord_type,
                                             coordinate=coordinate,
                                             spring_const=self.spring_const,
                                             reference=self.reference)
+
         elif method == 'dftb':
             self.ase_atoms = init_config.ase_atoms()
 
             self.umbrella_dftb = DFTBUmbrellaCalculator(
                                  configuration=self.init_config,
                                  kpts=(1, 1, 1),
-                                 Hamiltonian_Charge=self.init_config.charge,
                                  coord_type=self.coord_type,
                                  coordinate=coordinate,
                                  spring_const=self.spring_const,
-                                 reference=self.reference)
+                                 reference=self.reference,
+                                 Hamiltonian_Charge=2)
 
             self.ase_atoms.set_calculator(self.umbrella_dftb)
 
@@ -638,4 +644,3 @@ class UmbrellaSampling:
         self.pulling_rate = None
         self.num_windows = None
         self.simulation_time = None
-
