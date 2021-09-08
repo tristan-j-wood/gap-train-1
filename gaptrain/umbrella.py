@@ -100,7 +100,8 @@ class DFTBUmbrellaCalculator(DFTB):
 
         dftb_atoms = atoms.copy()
 
-        dftb_calc = DFTB(kpts=(1, 1, 1))
+        dftb_calc = DFTB(kpts=self.kpts,
+                         Hamiltonian_Charge=self.hamiltonian_charge)
         dftb_atoms.set_calculator(dftb_calc)
 
         bias = self._calculate_energy_bias(dftb_atoms)
@@ -113,7 +114,9 @@ class DFTBUmbrellaCalculator(DFTB):
 
         dftb_atoms = atoms.copy()
 
-        dftb_calc = DFTB(kpts=(1, 1, 1))
+        # MAKE THIS GENERAL
+        dftb_calc = DFTB(kpts=self.kpts,
+                         Hamiltonian_Charge=self.hamiltonian_charge)
         dftb_atoms.set_calculator(dftb_calc)
 
         bias = self._calculate_force_bias(dftb_atoms)
@@ -129,17 +132,15 @@ class DFTBUmbrellaCalculator(DFTB):
 
         return forces
 
-    def __init__(self, configuration=None, kpts=None, coord_type=None,
+    def __init__(self, configuration=None, kpts=(1, 1, 1), coord_type=None,
                  coordinate=None, spring_const=None, reference=None,
                  save_forces=False, **kwargs):
-        super().__init__(restart=None,
-                         label='dftb', atoms=None, kpts=(1, 1, 1),
-                         slako_dir=None, **kwargs)
-
-        logger.info(f'{kwargs}')
+        super().__init__(restart=None, label='dftb', atoms=None,
+                         kpts=kpts, slako_dir=None, **kwargs)
 
         self.configuration = configuration
         self.kpts = kpts
+        self.hamiltonian_charge = kwargs["Hamiltonian_Charge"]
         self.coord_type = coord_type
         self.coordinate = coordinate
         self.spring_const = spring_const
@@ -629,7 +630,7 @@ class UmbrellaSampling:
                                  coordinate=coordinate,
                                  spring_const=self.spring_const,
                                  reference=self.reference,
-                                 Hamiltonian_Charge=2)
+                                 Hamiltonian_Charge=self.init_config.charge)
 
             self.ase_atoms.set_calculator(self.umbrella_dftb)
 
