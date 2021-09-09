@@ -27,12 +27,35 @@ def _get_distance_derivative(atoms, indexes, reference):
     assert euclidean_distance > 0
 
     norm = 2 * (euclidean_distance - reference) / euclidean_distance
-    f_x, f_y, f_z = norm * x_dist, norm * y_dist, norm * z_dist
 
+    f_x, f_y, f_z = norm * x_dist, norm * y_dist, norm * z_dist
     derivitive_vector[indexes[0]][:] = [f_x, f_y, f_z]
     derivitive_vector[indexes[1]][:] = - derivitive_vector[indexes[0]][:]
 
     return derivitive_vector
+
+
+def _get_mpair_distance_derivative(atoms, indexes, reference, num_pairs):
+    """Calculates the vector of the derivative for an m-pair harmonic bias"""
+
+    derivitive_vector = np.zeros((len(atoms), 3))
+
+    atom_list = [atoms[indexes[i]] for i in range(len(atoms))]
+
+    # FIX THIS - need x, y z and eucliean distance
+    # TEST THIS FUNCTION
+    euclidean_distances = [atoms.get_distance(indexes[i],
+                                              indexes[i+1],
+                                              mic=True)
+                           for i in range(num_pairs)[::2]]
+
+    first_dists = np.sum(euclidean_distances[:1])
+    sum_dists = np.sum(euclidean_distances[1:])
+
+    norm = 2 / (num_pairs ** 2) * (sum_dists -
+                                   (num_pairs * reference)) / first_dists
+
+    return NotImplementedError
 
 
 def _get_torsion_derivative(atoms, indexes, reference):
@@ -114,7 +137,6 @@ class DFTBUmbrellaCalculator(DFTB):
 
         dftb_atoms = atoms.copy()
 
-        # MAKE THIS GENERAL
         dftb_calc = DFTB(kpts=self.kpts,
                          Hamiltonian_Charge=self.hamiltonian_charge)
         dftb_atoms.set_calculator(dftb_calc)
@@ -598,6 +620,7 @@ class UmbrellaSampling:
             logger.info(f'Initial value of umbrella sampling:'
                         f' {self.reference:.2f}')
 
+        # Two pairs of atoms also gives a coordinate len of 4
         elif len(coordinate) == 4:
             self.coord_type = 'torsion'
         elif isinstance(coordinate, gaptrain.configurations.Configuration):
