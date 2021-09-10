@@ -35,27 +35,30 @@ def _get_distance_derivative(atoms, indexes, reference):
     return derivitive_vector
 
 
-def _get_mpair_distance_derivative(atoms, indexes, reference, num_pairs):
+def _get_mpair_distance_derivative(atoms, indx, ref):
     """Calculates the vector of the derivative for an m-pair harmonic bias"""
 
+    num_pairs = len(indx)
     derivitive_vector = np.zeros((len(atoms), 3))
 
-    atom_list = [atoms[indexes[i]] for i in range(len(atoms))]
+    euclidean_dists = [atoms.get_distance(indx[i][0], indx[i][1], mic=True)
+                       for i in range(num_pairs)]
 
-    # FIX THIS - need x, y z and eucliean distance
-    # TEST THIS FUNCTION
-    euclidean_distances = [atoms.get_distance(indexes[i],
-                                              indexes[i+1],
-                                              mic=True)
-                           for i in range(num_pairs)[::2]]
+    sum_dists = np.sum(euclidean_dists)
+    normalisation = (2 / (num_pairs ** 2)) * (sum_dists - (num_pairs * ref))
 
-    first_dists = np.sum(euclidean_distances[:1])
-    sum_dists = np.sum(euclidean_distances[1:])
+    for i, pair in enumerate(indx):
+        x_dist, y_dist, z_dist = [atoms[pair[0]].position[j] -
+                                  atoms[pair[1]].position[j] for j in range(3)]
 
-    norm = 2 / (num_pairs ** 2) * (sum_dists -
-                                   (num_pairs * reference)) / first_dists
+        x_i = x_dist * normalisation / euclidean_dists[i]
+        y_i = y_dist * normalisation / euclidean_dists[i]
+        z_i = z_dist * normalisation / euclidean_dists[i]
 
-    return NotImplementedError
+        derivitive_vector[pair[0]][:] = [x_i, y_i, z_i]
+        derivitive_vector[pair[1]][:] = [-x_i, -y_i, -z_i]
+
+    return derivitive_vector
 
 
 def _get_torsion_derivative(atoms, indexes, reference):
@@ -76,9 +79,12 @@ class RxnCoordinateAtoms(Atoms):
 
     def get_rxn_coords(self, indexes):
 
-        euclidean_distance = self.get_distance(indexes[0], indexes[1],
-                                               mic=True)
-
+        # NOT GENERAL TO N PAIR ATOMS
+        # euclidean_distance = self.get_distance(indexes[0], indexes[1],
+        #                                        mic=True)
+        ### TESTING ###
+        euclidean_distance = 1
+        ### TESTING ###
         assert euclidean_distance > 0
 
         return euclidean_distance
@@ -184,6 +190,11 @@ class GAPUmbrellaCalculator(Calculator):
             coord_derivative = _get_distance_derivative(atoms, self.coordinate,
                                                         self.reference)
 
+        if self.coord_type == 'pairs':
+            coord_derivative = _get_mpair_distance_derivative(atoms,
+                                                              self.coordinate,
+                                                              self.reference)
+
         if self.coord_type == 'rmsd':
             return NotImplementedError
 
@@ -202,6 +213,16 @@ class GAPUmbrellaCalculator(Calculator):
             euclidean_distance = atoms.get_distance(indexes[0], indexes[1],
                                                     mic=True)
             coord = (euclidean_distance - self.reference) ** 2
+
+        if self.coord_type == 'pairs':
+            num_pairs = len(indexes)
+            euclidean_dists = [atoms.get_distance(indexes[i][0], indexes[i][1],
+                                                  mic=True)
+                               for i in range(num_pairs)]
+
+            average_dists = (1 / num_pairs) * np.sum(euclidean_dists)
+
+            coord = (average_dists - self.reference) ** 2
 
         bias = 0.5 * self.spring_const * coord
 
@@ -227,15 +248,15 @@ class GAPUmbrellaCalculator(Calculator):
 
         bias = self._calculate_force_bias(gap_atoms)
 
-        if self.save_forces:
+        # if self.save_forces:
             # Is this zero index general to any reaction coordinate?
-            force_vec = bias[self.coordinate[0]]
-            self.force_mag = np.linalg.norm(force_vec)
-
-            indexes = self.coordinate
-            # Is this euclidean_distance general to > single-pairs?
-            self.euclid_distance = atoms.get_distance(indexes[0], indexes[1],
-                                                      mic=True)
+            # force_vec = bias[self.coordinate[0]]
+            # self.force_mag = np.linalg.norm(force_vec)
+            #
+            # # Is this euclidean_distance general to > single-pairs?
+            # self.euclid_distance = atoms.get_distance(self.coordinate[0],
+            #                                           self.coordinate[1],
+            #                                           mic=True)
 
         forces = gap_atoms.get_forces() + bias
 
@@ -257,7 +278,7 @@ class GAPUmbrellaCalculator(Calculator):
         self.force_mag = None
         self.euclid_distance = None
 
-        assert coord_type in ['distance', 'rmsd', 'torsion']
+        assert coord_type in ['distance', 'rmsd', 'torsion', 'pairs']
         assert coordinate is not None
         assert spring_const is not None
         assert reference is not None
@@ -617,7 +638,24 @@ class UmbrellaSampling:
                     and Grossman Wham currently implemented.
         """
 
-        if len(coordinate) == 2:
+        ### TESTING ONLY ###
+        if len(coordinate) == 1:
+
+            self.coord_type = 'pairs'
+            _atoms = init_config.ase_atoms()
+
+            num_pairs = len(coordinate)
+            euclidean_dists = [_atoms.get_distance(coordinate[i][0], coordinate[i][1],
+                                                  mic=True)
+                               for i in range(num_pairs)]
+
+            self.reference = (1 / num_pairs) * np.sum(euclidean_dists)
+            logger.info(f'Initial value of umbrella sampling:'
+                        f' {self.reference:.2f}')
+
+            ### TESTING ONLY ###
+
+        elif len(coordinate) == 2:
             self.coord_type = 'distance'
             _atoms = init_config.ase_atoms()
 
