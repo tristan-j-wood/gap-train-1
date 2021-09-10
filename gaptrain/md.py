@@ -611,12 +611,17 @@ def run_umbrella_gapmd(configuration, umbrella_gap, temp, dt, interval,
               f'dyn.attach(traj.write, interval={interval})',
               # Currently only value for integer values of 1/dt and error
               # may compound
-              f'if {pulling_rate} is not None:'
+              f'if {pulling_rate} != None:'
               f'    dyn.attach(update_reference, interval={1//dt})',
-              # Currently calls this function whenever forces is called, which
-              # may or may not be every step of the simulation
+              'force_file = open("forces.txt", "w")',
+              'def print_forces(atoms=system):',
+              '    force_file.write(str(pot.force_mag)+'
+              '    " "+str(pot.euclid_distance)+"\\n")\n',
+              # Currently only value for integer values of 1/dt and error
+              # may compound
               f'if {save_forces}:',
               f'    pot.save_forces = True',
+              f'    dyn.attach(print_forces, interval={1//dt})',
               f'dyn.run(steps={n_steps})',
               'energy_file.close()',
               sep='\n', file=quippy_script)

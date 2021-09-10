@@ -228,11 +228,14 @@ class GAPUmbrellaCalculator(Calculator):
         bias = self._calculate_force_bias(gap_atoms)
 
         if self.save_forces:
+            # Is this zero index general to any reaction coordinate?
             force_vec = bias[self.coordinate[0]]
-            force_magnitude = np.linalg.norm(force_vec)
+            self.force_mag = np.linalg.norm(force_vec)
 
-            with open('spring_force.txt', 'a') as outfile:
-                print(f'{force_magnitude}', file=outfile)
+            indexes = self.coordinate
+            # Is this euclidean_distance general to > single-pairs?
+            self.euclid_distance = atoms.get_distance(indexes[0], indexes[1],
+                                                      mic=True)
 
         forces = gap_atoms.get_forces() + bias
 
@@ -250,6 +253,9 @@ class GAPUmbrellaCalculator(Calculator):
         self.spring_const = spring_const
         self.reference = reference
         self.save_forces = save_forces
+
+        self.force_mag = None
+        self.euclid_distance = None
 
         assert coord_type in ['distance', 'rmsd', 'torsion']
         assert coordinate is not None
