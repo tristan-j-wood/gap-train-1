@@ -392,7 +392,7 @@ def run_gapmd(configuration, gap, temp, dt, interval, init_temp=None, **kwargs):
     return traj
 
 
-# @work_in_tmp_dir(kept_exts=['.txt'])
+@work_in_tmp_dir(kept_exts=['.txt'])
 def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
                         distance=None, pulling_rate=None, save_forces=False,
                         **kwargs):
@@ -613,13 +613,13 @@ def run_umbrella_gapmd(configuration, umbrella_gap, temp, dt, interval,
               # may compound
               f'if {pulling_rate} != None:'
               f'    dyn.attach(update_reference, interval={1//dt})',
-              'force_file = open("forces.txt", "w")',
               'def print_forces(atoms=system):',
               '    force_file.write(str(pot.force_mag)+'
               '    " "+str(pot.euclid_distance)+"\\n")\n',
               # Currently only value for integer values of 1/dt and error
               # may compound
               f'if {save_forces}:',
+              f'    force_file = open("forces.txt", "w")',
               f'    pot.save_forces = True',
               f'    dyn.attach(print_forces, interval={1//dt})',
               f'dyn.run(steps={n_steps})',

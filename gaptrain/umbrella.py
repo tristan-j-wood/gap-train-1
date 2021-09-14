@@ -130,11 +130,21 @@ class DFTBUmbrellaCalculator(DFTB):
         bias = self._calculate_force_bias(dftb_atoms)
 
         if self.save_forces:
-            force_vec = bias[self.coordinate[0]]
-            force_magnitude = np.linalg.norm(force_vec)
 
-            with open('spring_force.txt', 'a') as outfile:
-                print(f'{force_magnitude}', file=outfile)
+            force_mags = []
+            for i, _ in enumerate(self.coordinate):
+                force_vec = bias[self.coordinate[i][0]]
+                force_mags.append(np.linalg.norm(force_vec))
+
+            self.force_mag = (1 / len(self.coordinate) * np.sum(force_mags))
+
+            euclidean_dists = [dftb_atoms.get_distance(self.coordinate[i][0],
+                                                       self.coordinate[i][1],
+                                                       mic=True)
+                               for i in range(len(self.coordinate))]
+
+            self.euclid_distance = (1 / len(self.coordinate) *
+                                    np.sum(euclidean_dists))
 
         forces = dftb_atoms.get_forces() + bias
 
@@ -154,6 +164,8 @@ class DFTBUmbrellaCalculator(DFTB):
         self.spring_const = spring_const
         self.reference = reference
         self.save_forces = save_forces
+        self.force_mag = None
+        self.euclid_distance = None
 
 
 class GAPUmbrellaCalculator(Calculator):
@@ -268,10 +280,9 @@ class UmbrellaSampling:
     umbrella sampling in windows and running WHAM analysis using PyWham
     """
 
-    def generate_pulling_configs(self, temp=None, dt=None,
-                                 interval=None,
+    def generate_pulling_configs(self, temp=None, dt=None, interval=None,
                                  pulling_rate=None, final_value=None,
-                                 save_forces=True, **kwargs):
+                                 **kwargs):
         """Generates an MD trajectory along a reaction coordinate
 
         :param temp: (float) Temperature in K to run pulling simulation and
@@ -284,9 +295,6 @@ class UmbrellaSampling:
         :param pulling_rate: (float) Rate of pulling in Å / fs
 
         :param final_value: (float) Final separation of system in Å
-
-        :param save_forces: (bool) If True, magnitude of force on spring are
-                            saved to a spring_forces.txt file at each interval
 
         :param kwargs: {fs, ps, ns} Simulation time in some units
         """
@@ -314,7 +322,7 @@ class UmbrellaSampling:
                                       interval=interval,
                                       distance=distance,
                                       pulling_rate=pulling_rate,
-                                      save_forces=save_forces,
+                                      save_forces=True,
                                       **kwargs)
 
         elif self.method == 'dftb':
@@ -325,7 +333,7 @@ class UmbrellaSampling:
                                        interval=interval,
                                        distance=distance,
                                        pulling_rate=pulling_rate,
-                                       save_forces=save_forces,
+                                       save_forces=True,
                                        **kwargs)
 
         traj.save('pulling_traj.xyz')
@@ -371,10 +379,14 @@ class UmbrellaSampling:
         traj_dists = {}
         for index, frame in enumerate(traj):
             frame_atoms = frame.ase_atoms()
-            dist = frame_atoms.get_distance(self.coordinate[0],
-                                            self.coordinate[1],
-                                            mic=True)
-            traj_dists[index] = dist
+            num_pairs = len(self.coordinate)
+            euclidean_dists = [frame_atoms.get_distance(self.coordinate[i][0],
+                                                        self.coordinate[i][1],
+                                                        mic=True)
+                               for i in range(num_pairs)]
+
+            avg_distance = (1 / num_pairs) * np.sum(euclidean_dists)
+            traj_dists[index] = avg_distance
 
         # Get the initial configurations used in the umbrella sampling windows
         umbrella_frames = Data()
@@ -402,9 +414,13 @@ class UmbrellaSampling:
             window_atoms = frame.ase_atoms()
             logger.info(f'Running umbrella sampling')
 
-            window_reference = window_atoms.get_distance(self.coordinate[0],
-                                                         self.coordinate[1],
+            num_pairs = len(self.coordinate)
+            euclidean_dists = [window_atoms.get_distance(self.coordinate[i][0],
+                                                         self.coordinate[i][1],
                                                          mic=True)
+                               for i in range(num_pairs)]
+
+            window_reference = (1 / num_pairs) * np.sum(euclidean_dists)
 
             if self.method == 'gap':
                 self.umbrella_gap.reference = window_reference
@@ -417,6 +433,7 @@ class UmbrellaSampling:
                                           temp=temp,
                                           dt=dt,
                                           interval=interval,
+                                          save_forces=False,
                                           **kwargs)
 
             elif self.method == 'dftb':
@@ -431,6 +448,7 @@ class UmbrellaSampling:
                                            temp=temp,
                                            dt=dt,
                                            interval=interval,
+                                           save_forces=False,
                                            **kwargs)
 
             with open(f'window_{window}.txt', 'w') as outfile:
