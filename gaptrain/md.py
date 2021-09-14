@@ -480,17 +480,17 @@ def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
     dyn.attach(print_energy, atoms=system, interval=interval)
     dyn.attach(print_rxn_coord, interval=interval)
     dyn.attach(traj.write, interval=interval)
-    dyn.attach(print_forces, interval=1//dt)
+
+    # Currently only value for integer values of 1/dt and error
+    # may compound
+    if save_forces:
+        system.calc.save_forces = True
+        dyn.attach(print_forces, interval=1//dt)
 
     # Currently only value for integer values of 1/dt and error
     # may compound
     if pulling_rate is not None:
         dyn.attach(update_reference, interval=1//dt)
-
-    # Currently calls this function whenever forces is called, which
-    # may or may not be every step of the simulation
-    if save_forces:
-        system.calc.save_forces = True
 
     dyn.run(steps=n_steps)
 
