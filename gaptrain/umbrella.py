@@ -95,10 +95,15 @@ class DFTBUmbrellaCalculator(DFTB):
 
         indexes = self.coordinate
 
-        if self.coord_type == 'distance':
-            euclidean_distance = atoms.get_distance(indexes[0], indexes[1],
-                                                    mic=True)
-            coord = (euclidean_distance - self.reference) ** 2
+        if self.coord_type == 'pairs':
+            num_pairs = len(indexes)
+            euclidean_dists = [atoms.get_distance(indexes[i][0], indexes[i][1],
+                                                  mic=True)
+                               for i in range(num_pairs)]
+
+            average_dists = (1 / num_pairs) * np.sum(euclidean_dists)
+
+            coord = (average_dists - self.reference) ** 2
 
         bias = 0.5 * self.spring_const * coord
 

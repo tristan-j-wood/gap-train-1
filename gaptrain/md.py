@@ -470,11 +470,17 @@ def run_umbrella_dftbmd(configuration, ase_atoms, temp, dt, interval,
     def update_reference(pulling_rate=pulling_rate):
         system.calc.reference += pulling_rate
 
+    def print_forces():
+        with open("forces.txt", "a") as outfile:
+            print(f'{system.calc.force_mag} '
+                  f'{system.calc.euclid_distance}', file=outfile)
+
     dyn = Langevin(system, dt * units.fs, temp * units.kB, 0.02)
 
     dyn.attach(print_energy, atoms=system, interval=interval)
     dyn.attach(print_rxn_coord, interval=interval)
     dyn.attach(traj.write, interval=interval)
+    dyn.attach(print_forces, interval=1//dt)
 
     # Currently only value for integer values of 1/dt and error
     # may compound
