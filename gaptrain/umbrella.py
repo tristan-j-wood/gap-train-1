@@ -643,6 +643,11 @@ class UmbrellaSampling:
 
             self.coord_type = 'pairs'
             logger.info(f'Coordinate type detected as pairs')
+
+            flat_list = [item for sublist in coordinate for item in sublist]
+            if len(set(flat_list)) != len(flat_list):
+                raise ValueError("All atom indexes in pairs must be unique")
+
             _atoms = init_config.ase_atoms()
 
             num_pairs = len(coordinate)

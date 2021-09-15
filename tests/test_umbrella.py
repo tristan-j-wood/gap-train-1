@@ -17,28 +17,36 @@ potential = os.path.join(here, 'data', 'potential_h2o.xml')
 gap = gt.gap.GAP(name=potential, system=water)
 
 
-def test_get_distance_coordinate_bias():
+def test_get_mpair_distance_coordinate_bias():
     """ Tests for calculating the derivative of harmonic Euclidean distance."""
 
     # Choose O atoms as the coordinate, with reference 1 and set new positions
-    indexes = [0, 3]
+    indexes = [[0, 3], [2, 1]]
     ref = 1
     new_pos = [[1, 1, 1],
-               [1, 1, 1],
-               [1, 1, 1],
-               [5, 1, 1],
-               [1, 1, 1],
-               [1, 1, 1]
+               [2, 2, 2],
+               [3, 3, 3],
+               [4, 4, 4],
+               [5, 5, 5],
+               [6, 6, 6]
                ]
+
+    umbrella = gt.umbrella.UmbrellaSampling(init_config=config,
+                                            gap=gap,
+                                            method='gap',
+                                            coordinate=indexes,
+                                            spring_const=10,
+                                            wham_method='grossman')
 
     ase_atoms = config.ase_atoms()
     ase_atoms.set_positions(new_pos, apply_constraint=False)
 
-    derivative = gt.umbrella._get_distance_derivative(ase_atoms, indexes, ref)
+    derivative = gt.umbrella._get_mpair_distance_derivative(ase_atoms,
+                                                            indexes,
+                                                            ref)
 
-    # Forces should be equal an opposite (6 in this case) for the two atoms
-    assert derivative[indexes[0]][0] == -6 and derivative[indexes[1]][0] == 6
-    assert derivative[0][0] == -derivative[indexes[1]][0]
+    # Forces should be equal and opposite for the two atoms
+    assert derivative[indexes[0][0]][0] == -derivative[indexes[0][1]][0]
 
     bias_strength = 1
     bias = -0.5 * bias_strength * derivative
@@ -51,7 +59,10 @@ def test_get_distance_coordinate_bias():
 
 def test_gapumbrellacalculator():
 
-    gap_umbrella_calc = GAPUmbrellaCalculator()
+    gap_umbrella_calc = GAPUmbrellaCalculator(coord_type='pairs',
+                                              coordinate=[[0, 1]],
+                                              spring_const=1,
+                                              reference=1)
 
     assert hasattr(gap_umbrella_calc, 'calculator')
     assert hasattr(gap_umbrella_calc, 'coordinate')
