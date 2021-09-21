@@ -305,7 +305,13 @@ class UmbrellaSampling:
         """
 
         self.final_value = final_value
+
+        assert pulling_rate is not None
+        if pulling_rate < 0:
+            self.pulling_simulation = False
+
         self.pulling_rate = pulling_rate
+
         distance = final_value - self.reference
 
         self.simulation_time = distance / self.pulling_rate
@@ -480,7 +486,8 @@ class UmbrellaSampling:
     def run_wham_analysis(self, temp, num_bins=30, tol=0.00001, numpad=0,
                           wham_path=None, energy_interval=None,
                           coord_interval=None, energy_function=None,
-                          temp_interval=0.1):
+                          temp_interval=0.1, num_MC_trials=0, randSeed=1,
+                          correlation=10):
         """Calculates the Gibbs free energy using the WHAM method"""
 
         assert wham_path is not None
@@ -490,8 +497,16 @@ class UmbrellaSampling:
 
         if self.wham_method == 'grossman':
 
-            hist_min = self.reference
-            hist_max = self.final_value
+            self.correlation = correlation
+
+            if self.pulling_simulation:
+                hist_min = self.reference
+                hist_max = self.final_value
+
+            else:
+                hist_max = self.reference
+                hist_min = self.final_value
+
             metadatafile = 'metadata.txt'
             freefile = 'free_energy.txt'
 
@@ -501,7 +516,8 @@ class UmbrellaSampling:
                            'implementation are in eV')
 
             os.system(f'{wham_path} {hist_min} {hist_max} {num_bins} {tol} '
-                      f'{temp} {numpad} {metadatafile} {freefile}')
+                      f'{temp} {numpad} {metadatafile} {freefile} '
+                      f'{num_MC_trials} {randSeed}')
 
         if self.wham_method == 'pywham':
 
@@ -517,7 +533,7 @@ class UmbrellaSampling:
 
         return None
 
-    def _write_metafile(self, file_names, temp):
+    def _write_metafile(self, file_names):
         with open('metadata.txt', 'w') as outfile:
 
             for file in file_names:
@@ -527,7 +543,7 @@ class UmbrellaSampling:
                     print(f'{file} '
                           f'{ref} ' 
                           f'{self.spring_const} '
-                          f'{temp}', file=outfile)
+                          f'{self.correlation} ', file=outfile)
 
     def _write_xml_file(self, energy_interval, coord_interval, temp,
                         temp_interval, file_names, energy_function,
@@ -704,5 +720,7 @@ class UmbrellaSampling:
         self.coordinate = coordinate
         self.final_value = None
         self.pulling_rate = None
+        self.pulling_simulation = True
         self.num_windows = None
+        self.correlation = None
         self.simulation_time = None
