@@ -510,7 +510,7 @@ class UmbrellaSampling:
             metadatafile = 'metadata.txt'
             freefile = 'free_energy.txt'
 
-            self._write_metafile(file_list, temp)
+            self._write_metafile(file_list)
 
             logger.warning('Ensure that the units in the Grossman WHAM '
                            'implementation are in eV')
