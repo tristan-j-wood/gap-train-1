@@ -609,12 +609,16 @@ def run_umbrella_gapmd(configuration, umbrella_gap, temp, dt, interval,
               'rxn_coord_file = open("tmp_rxn_coord.txt", "w")',
               'def print_rxn_coord(atoms=system):',
               '    rxn_coord_file.write(str(atoms.get_rxn_coords(coordinate))+"\\n")\n',
+              'nd_coord_file = open("tmp_nd_coord.txt", "w")',
+              'def print_nd_coord(atoms=system):',
+              '    nd_coord_file.write(str(atoms.get_nd_coords(coordinate))+"\\n")\n',
               f'def update_reference(pulling_rate={pulling_rate}):',
               '    pot.reference += pulling_rate',
               f'dyn = {dynamics_string()}',
               f'dyn.attach(print_energy, interval={interval})',
               f'dyn.attach(print_rxn_coord, interval={interval})',
               f'dyn.attach(traj.write, interval={interval})',
+              f'dyn.attach(print_nd_coord, interval={interval})',
               # Currently only value for integer values of 1/dt and error
               # may compound
               f'if {pulling_rate} != None:'

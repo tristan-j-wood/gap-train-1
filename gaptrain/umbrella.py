@@ -68,6 +68,16 @@ class RxnCoordinateAtoms(Atoms):
 
         return avg_distance
 
+    def get_nd_coords(self, indexes):
+
+        num_pairs = len(indexes)
+        euclidean_dists = [self.get_distance(indexes[i][0],
+                                             indexes[i][1],
+                                             mic=True)
+                           for i in range(num_pairs)]
+
+        return euclidean_dists
+
 
 class DFTBUmbrellaCalculator(DFTB):
     """Incomplete implementation of DFTB umbrella sampling calculator"""
@@ -313,7 +323,6 @@ class UmbrellaSampling:
         self.pulling_rate = pulling_rate
 
         distance = final_value - self.reference
-
         self.simulation_time = distance / self.pulling_rate
 
         if self.simulation_time < 100:
@@ -476,6 +485,14 @@ class UmbrellaSampling:
                         print(f'{configuration.energy}',
                               f'{configuration.rxn_coord}',
                               f'{self.umbrella_dftb.reference}', file=outfile)
+
+            with open(f'nd_coord_{window}.txt', 'w') as outfile:
+
+                # Only works with gap currently
+                if self.method == 'gap':
+                    print(f'# {window_reference}', file=outfile)
+                    for i, configuration in enumerate(traj):
+                        print(f'{configuration.nd_coord}', file=outfile)
 
             combined_traj += traj
 

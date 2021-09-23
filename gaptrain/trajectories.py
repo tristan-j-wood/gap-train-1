@@ -92,6 +92,18 @@ class Trajectory(gt.ConfigurationSet):
 
             os.remove('tmp_rxn_coord.txt')
 
+        # Set the n-d coordinate from the trajectory if possible
+        if os.path.exists('tmp_nd_coord.txt'):
+            for i, line in enumerate(open('tmp_nd_coord.txt', 'r')):
+
+                try:
+                    self[i].nd_coord = line.strip('\n')
+
+                except (TypeError, ValueError, IndexError):
+                    logger.warning('Could not set the n-d coordinate')
+
+            os.remove('tmp_nd_coord.txt')
+
         return None
 
     def extract_from_gmx(self, filename, init_config):
