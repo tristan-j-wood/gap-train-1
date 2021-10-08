@@ -14,7 +14,7 @@ from gaptrain import gap
 from gaptrain import solvents
 from gaptrain import umbrella
 from gaptrain.gap import GAP, IntraGAP, InterGAP, IIGAP
-from gaptrain import pmid
+from gaptrain import pimd
 
 __all__ = ['System',
            'Configuration',

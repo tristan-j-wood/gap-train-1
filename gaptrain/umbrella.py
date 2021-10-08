@@ -11,6 +11,7 @@ import xml.etree.cElementTree as ET
 from xml.dom import minidom
 import os
 from copy import deepcopy
+from scipy.optimize import curve_fit
 
 
 def _get_mpair_distance_derivative(atoms, indx, ref):
@@ -423,7 +424,7 @@ class UmbrellaSampling:
 
         combined_traj = Data()
 
-        # paralellise this but watch out for self.variables
+        # Paralellise this but watch out for self.variables
         for window, frame in enumerate(umbrella_frames):
             self.pulling_rate = pulling_rate
 
@@ -651,6 +652,28 @@ class UmbrellaSampling:
             indent="   ")
         with open("wham.spec.xml", "w") as f:
             f.write(xml_string)
+
+    def _get_variable_spring(self, window_data):
+
+        def gauss(x, *p):
+            a, b, c = p
+            return a * np.exp(-(x - b) ** 2 / (2. * c ** 2))
+
+        for window in window_data:
+
+            hist, bin_edges = np.histogram(xxx, density=True)
+            bin_centres = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+            initial_guess = [1., 0., 1.]
+            coeff, _ = curve_fit(gauss, bin_centres, hist, p0=initial_guess)
+
+
+        # 1. Run dynamics to generate initial distribution
+        # 2. Fit Gaussian for each function: Aexp(-(x-b)^2/2c^2)
+        # 3. Calculate the exponetial using the overlap integral
+        # 4. Scale K for each window or other method
+
+        return NotImplementedError
 
     def __init__(self, init_config=None, method=None, gap=None,
                  coordinate=None, spring_const=None, wham_method='grossman'):
