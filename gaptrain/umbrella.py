@@ -507,16 +507,91 @@ class UmbrellaSampling:
 
         return None
 
-
     def run_umbrella_sampling_dev(self, traj, temp, dt, interval,
                                   pulling_rate=None, **kwargs):
+        """Development function for variable K and reference for US"""
 
         if ('ps' and 'ns' and 'fs') not in kwargs:
             raise ValueError("Must specify time in umbrella sampling windows")
 
+        if pulling_rate is not None:
+            logger.error("Pulling rate must be None for umbrella "
+                         "sampling simulations!")
+
         init_value = self.reference
         distance = self.final_value - init_value
+        # Assume 10 windows is the target for development
+        self.num_windows = 10
+        distance_intervals = distance / (self.num_windows - 1)
+        combined_coords = []
 
+        # Get a dictonary of reaction coordinate distances for each frame
+        traj_dists = {}
+        for index, frame in enumerate(traj):
+            frame_atoms = frame.ase_atoms()
+            num_pairs = len(self.coordinate)
+            euclidean_dists = [frame_atoms.get_distance(self.coordinate[i][0],
+                                                        self.coordinate[i][1],
+                                                        mic=True)
+                               for i in range(num_pairs)]
+
+            avg_distance = (1 / num_pairs) * np.sum(euclidean_dists)
+            traj_dists[index] = avg_distance
+
+        # Get the initial configurations used in the umbrella sampling windows
+        umbrella_frames = Data()
+        for _ in range(self.num_windows):
+            window_dists = deepcopy(traj_dists)
+
+            for frame_key, dist_value in window_dists.items():
+                window_dists[frame_key] = abs(dist_value - init_value)
+
+            traj_index = min(window_dists.keys(), key=window_dists.get)
+            init_value += distance_intervals
+
+            umbrella_frames.add(traj[traj_index])
+
+        def _run_individual_umbrella(window, frame):
+
+            window_atoms = frame.ase_atoms()
+            logger.info(f'Running umbrella sampling')
+
+            num_pairs = len(self.coordinate)
+            euclidean_dists = [window_atoms.get_distance(self.coordinate[i][0],
+                                                         self.coordinate[i][1],
+                                                         mic=True)
+                               for i in range(num_pairs)]
+
+            window_reference = (1 / num_pairs) * np.sum(euclidean_dists)
+
+            self.umbrella_gap.reference = window_reference
+
+            logger.info(f'Window {window} with reference '
+                        f'{self.umbrella_gap.reference:.2f} Å')
+
+            traj = run_umbrella_gapmd(configuration=frame,
+                                      umbrella_gap=self.umbrella_gap,
+                                      temp=temp,
+                                      dt=dt,
+                                      interval=interval,
+                                      save_forces=False,
+                                      **kwargs)
+
+            return traj
+
+        # Run initial umbrella window
+        window_0_traj = _run_individual_umbrella(window=0,
+                                                 frame=umbrella_frames[0])
+        window_1_traj = _run_individual_umbrella(window=1,
+                                                 frame=umbrella_frames[1])
+
+        combined_coords.append([coord.rxn_coord for coord in window_0_traj])
+        combined_coords.append([coord.rxn_coord for coord in window_1_traj])
+
+        numbers = self._get_variable_spring(combined_coords)
+        logger.info(numbers)
+
+        return None
 
     def run_wham_analysis(self, temp, num_bins=30, tol=0.00001, numpad=0,
                           wham_path=None, energy_interval=None,
@@ -680,7 +755,7 @@ class UmbrellaSampling:
         end = max(self.reference, self.final_value)
 
         overlap = Overlap(
-            x_range=np.linspace(start-0.2*start, end+0.2*end, 500)
+            x_range=np.linspace(start-0.1*start, end+0.1*end, 500)
         )
 
         gaussian_parms = []
@@ -700,8 +775,6 @@ class UmbrellaSampling:
             plt.plot(bin_centres, hist, label='Test data', alpha=0.3)
             plt.plot(bin_centres, hist_fit, label='Fitted data')
 
-        logger.info(gaussian_parms)
-
         integral_overlap_1 = overlap.calculate_overlap(gaussian_parms[0],
                                                        norm_func=gaussian_parms[1])
         integral_overlap_2 = overlap.calculate_overlap(gaussian_parms[1],
@@ -712,7 +785,7 @@ class UmbrellaSampling:
 
         plt.savefig('gaussian_dist.pdf', dpi=300)
 
-        return NotImplementedError
+        return integral_overlap_1, integral_overlap_2, gaussian_parms
 
     def __init__(self, init_config=None, method=None, gap=None,
                  coordinate=None, spring_const=None, wham_method='grossman'):
