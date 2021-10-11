@@ -12,6 +12,8 @@ from xml.dom import minidom
 import os
 from copy import deepcopy
 from scipy.optimize import curve_fit
+from scipy.integrate import quad
+import matplotlib.pyplot as plt
 
 
 def _get_mpair_distance_derivative(atoms, indx, ref):
@@ -423,6 +425,7 @@ class UmbrellaSampling:
             umbrella_frames.add(traj[traj_index])
 
         combined_traj = Data()
+        combined_coords = []
 
         # Paralellise this but watch out for self.variables
         for window, frame in enumerate(umbrella_frames):
@@ -496,10 +499,24 @@ class UmbrellaSampling:
                         print(f'{configuration.nd_coord}', file=outfile)
 
             combined_traj += traj
+            combined_coords.append([coord.rxn_coord for coord in traj])
 
         combined_traj.save(filename='combined_windows.xyz')
 
+        self._get_variable_spring(combined_coords)
+
         return None
+
+
+    def run_umbrella_sampling_dev(self, traj, temp, dt, interval,
+                                  pulling_rate=None, **kwargs):
+
+        if ('ps' and 'ns' and 'fs') not in kwargs:
+            raise ValueError("Must specify time in umbrella sampling windows")
+
+        init_value = self.reference
+        distance = self.final_value - init_value
+
 
     def run_wham_analysis(self, temp, num_bins=30, tol=0.00001, numpad=0,
                           wham_path=None, energy_interval=None,
@@ -653,25 +670,47 @@ class UmbrellaSampling:
         with open("wham.spec.xml", "w") as f:
             f.write(xml_string)
 
-    def _get_variable_spring(self, window_data):
+    def _get_variable_spring(self, windows_data):
 
         def gauss(x, *p):
             a, b, c = p
-            return a * np.exp(-(x - b) ** 2 / (2. * c ** 2))
+            return a * np.exp(-(x - b)**2 / (2. * c**2))
 
-        for window in window_data:
+        start = min(self.reference, self.final_value)
+        end = max(self.reference, self.final_value)
 
-            hist, bin_edges = np.histogram(xxx, density=True)
+        overlap = Overlap(
+            x_range=np.linspace(start-0.2*start, end+0.2*end, 500)
+        )
+
+        gaussian_parms = []
+
+        for window_data in windows_data:
+
+            hist, bin_edges = np.histogram(window_data, density=True, bins=500)
             bin_centres = (bin_edges[:-1] + bin_edges[1:]) / 2
 
             initial_guess = [1., 0., 1.]
-            coeff, _ = curve_fit(gauss, bin_centres, hist, p0=initial_guess)
+            coeff, _ = curve_fit(gauss, bin_centres, hist, p0=initial_guess,
+                                 maxfev=10000)
+            hist_fit = gauss(bin_centres, *coeff)
 
+            gaussian_parms.append(coeff.tolist())
 
-        # 1. Run dynamics to generate initial distribution
-        # 2. Fit Gaussian for each function: Aexp(-(x-b)^2/2c^2)
-        # 3. Calculate the exponetial using the overlap integral
-        # 4. Scale K for each window or other method
+            plt.plot(bin_centres, hist, label='Test data', alpha=0.3)
+            plt.plot(bin_centres, hist_fit, label='Fitted data')
+
+        logger.info(gaussian_parms)
+
+        integral_overlap_1 = overlap.calculate_overlap(gaussian_parms[0],
+                                                       norm_func=gaussian_parms[1])
+        integral_overlap_2 = overlap.calculate_overlap(gaussian_parms[1],
+                                                       norm_func=gaussian_parms[0])
+
+        overlap.plot_gaussian(gaussian_parms[0], gaussian_parms[1],
+                              integral_overlap_1, integral_overlap_2)
+
+        plt.savefig('gaussian_dist.pdf', dpi=300)
 
         return NotImplementedError
 
@@ -764,3 +803,152 @@ class UmbrellaSampling:
         self.num_windows = None
         self.correlation = None
         self.simulation_time = None
+
+
+class Overlap:
+
+    def gaussian(self, x, a, b, c):
+
+        return a * np.exp(-(x - b) ** 2 / (2 * c ** 2))
+
+    def calculate_area(self, low_limit, upp_limit, parms):
+
+        a, b, c = parms
+        integral = quad(self.gaussian, low_limit, upp_limit, args=(a, b, c))
+
+        return integral
+
+    def calc_intercepts(self, a, b, c, p, q, r):
+
+        assert a != 0 and p != 0
+
+        if c != r:
+
+            a_val = (2 * c ** 2) - (2 * r ** 2)
+            b_val = (4 * r ** 2 * b) - (4 * c ** 2 * q)
+            c_val = (2 * c ** 2 * q ** 2) - (2 * r ** 2 * b ** 2) - (
+                        4 * c ** 2 * r ** 2 * np.log(p / a))
+
+            if b_val ** 2 - 4 * a_val * c_val <= 0:
+                return False
+
+            intercept_1 = (-b_val + np.sqrt(
+                b_val ** 2 - 4 * a_val * c_val)) / (2 * a_val)
+            intercept_2 = (-b_val - np.sqrt(
+                b_val ** 2 - 4 * a_val * c_val)) / (2 * a_val)
+
+            min_ab = min(intercept_1, intercept_2)
+            max_ab = max(intercept_1, intercept_2)
+            assert max_ab > min_ab
+
+            intercepts = [min_ab, max_ab]
+
+            return intercepts
+
+        else:
+
+            if b != q:
+                intercept = ((q ** 2 - b ** 2) - 2 * c ** 2 * np.log(
+                    p / a)) / (2 * (q - b))
+                intercept = [intercept]
+
+                return intercept
+
+            elif b == q:
+
+                return False
+
+    def get_functions(self, min_int, parms_a, parms_b):
+
+        a, b, c = parms_a
+        p, q, r = parms_b
+
+        lower_point_a = self.gaussian(min_int - 0.1, a, b, c)
+        lower_point_b = self.gaussian(min_int - 0.1, p, q, r)
+
+        assert lower_point_a != lower_point_b
+
+        if lower_point_a < lower_point_b:
+            return parms_a, parms_b
+
+        else:
+            return parms_b, parms_a
+
+    def calculate_overlap(self, parms_a, norm_func):
+
+        intercepts = self.calc_intercepts(parms_a[0], parms_a[1], parms_a[2],
+                                          norm_func[0], norm_func[1],
+                                          norm_func[2])
+        norm_area = norm_func[0] * abs(norm_func[2]) * np.sqrt(2 * np.pi)
+
+        if intercepts is False:
+
+            area_a = parms_a[0] * parms_a[2] * np.sqrt(2 * np.pi)
+
+            if area_a / norm_area <= 1:
+                overlap = area_a / norm_area
+                assert overlap <= 1
+
+            else:
+                overlap = 1
+
+            return overlap
+
+        elif len(intercepts) == 1:
+
+            if parms_a[1] > norm_func[1]:
+                lower_func = parms_a
+                upper_func = norm_func
+            else:
+                lower_func = norm_func
+                upper_func = parms_a
+
+            int_lower = self.calculate_area(-np.inf, intercepts[0], lower_func)
+            int_upper = self.calculate_area(intercepts[0], np.inf, upper_func)
+
+            overlap = (int_lower[0] + int_upper[0]) / norm_area
+
+            return overlap
+
+        else:
+
+            func_1_parms, func_2_parms = self.get_functions(intercepts[0],
+                                                            parms_a, norm_func)
+
+            int_lower = self.calculate_area(-np.inf, intercepts[0],
+                                            func_1_parms)
+            int_middle = self.calculate_area(intercepts[0], intercepts[1],
+                                             func_2_parms)
+            int_upper = self.calculate_area(intercepts[1], np.inf,
+                                            func_1_parms)
+
+            overlap = (int_lower[0] + int_middle[0] + int_upper[0]) / norm_area
+
+            return overlap
+
+    def plot_gaussian(self, parm_1, parm_2, overlap_1, overlap_2):
+
+        func_1 = self.gaussian(self.x_range, parm_1[0], parm_1[1], parm_1[2])
+        func_2 = self.gaussian(self.x_range, parm_2[0], parm_2[1], parm_2[2])
+
+        plt.plot(self.x_range, func_1, label='Gaussian A')
+        plt.plot(self.x_range, func_2, label='Gaussian B')
+
+        plt.ylabel('Density')
+        plt.xlabel('$x$-range')
+
+        ax = plt.gca()
+        bbox_props = dict(fc="whitesmoke", ec="grey", lw=1)
+        plt.text(0.1, 0.9,
+                 f'Overlap to A: {overlap_1:.2f}\n'
+                 f'Overlap to B: {overlap_2:.2f}',
+                 ha='left', va='top',
+                 transform=ax.transAxes, size=10, bbox=bbox_props)
+
+        plt.savefig('overlap_gaussians.pdf', dpi=300)
+
+        return None
+
+    def __init__(self, x_range):
+
+        self.x_range = x_range
