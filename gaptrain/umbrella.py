@@ -577,19 +577,52 @@ class UmbrellaSampling:
                                       save_forces=False,
                                       **kwargs)
 
-            return traj
+            return traj, window_reference
 
-        # Run initial umbrella window
-        window_0_traj = _run_individual_umbrella(window=0,
-                                                 frame=umbrella_frames[0])
-        window_1_traj = _run_individual_umbrella(window=1,
-                                                 frame=umbrella_frames[1])
+        gaussian_pairs = [None, None]
+        win_ref_pair = [None, None]
 
-        combined_coords.append([coord.rxn_coord for coord in window_0_traj])
-        combined_coords.append([coord.rxn_coord for coord in window_1_traj])
+        overlaps_lower, overlaps_upper = [], []
+        ref_discrepancies = []
+        standard_deviation = []
 
-        numbers = self._get_variable_spring(combined_coords)
-        logger.info(numbers)
+        for window, frame in enumerate(umbrella_frames):
+
+            if window == 0:
+                # Run initial umbrella window
+                window_0_traj, win_ref_0 = _run_individual_umbrella(window=0,
+                                                                    frame=
+                                                                    umbrella_frames[
+                                                                        0])
+                gaussian_pairs[0] = [coord.rxn_coord for coord in
+                                     window_0_traj]
+                win_ref_pair[0] = win_ref_0
+
+            else:
+                win_traj, win_ref = _run_individual_umbrella(window, frame)
+
+                gaussian_pairs[1] = [coord.rxn_coord for coord in win_traj]
+                win_ref_pair[1] = win_ref
+
+                gaussian_data = self._get_variable_spring(gaussian_pairs)
+                logger.info(f'Overlap 1: {gaussian_data[0]}')
+                overlaps_lower.append(gaussian_data[0])
+                logger.info(f'Overlap 2: {gaussian_data[1]}')
+                overlaps_upper.append(gaussian_data[1])
+                logger.info(f'Reference discrepency: {gaussian_data[2][1][1]-win_ref_pair[1]}')
+                ref_discrepancies.append(gaussian_data[2][1][1]-win_ref_pair[1])
+                logger.info(f'Standard deviation 1: {gaussian_data[2][0][2]}')
+                logger.info(f'Standard deviation 2: {gaussian_data[2][1][2]}')
+                standard_deviation.append(gaussian_data[2][1][2])
+
+                gaussian_pairs[0] = gaussian_pairs[1]
+                win_ref_pair[0] = win_ref_pair[1]
+
+        with open('overlap_data', 'w') as outfile:
+            print(f'{overlaps_lower}',
+                  f'{overlaps_upper}',
+                  f'{ref_discrepancies}',
+                  f'{standard_deviation}', file=outfile, sep='\n')
 
         return None
 
@@ -770,20 +803,19 @@ class UmbrellaSampling:
                                  maxfev=10000)
             hist_fit = gauss(bin_centres, *coeff)
 
+            coeff[2] = np.abs(coeff[2])
             gaussian_parms.append(coeff.tolist())
 
-            plt.plot(bin_centres, hist, label='Test data', alpha=0.3)
+            plt.plot(bin_centres, hist, label='Test data', alpha=0.1)
             plt.plot(bin_centres, hist_fit, label='Fitted data')
 
-        integral_overlap_1 = overlap.calculate_overlap(gaussian_parms[0],
-                                                       norm_func=gaussian_parms[1])
-        integral_overlap_2 = overlap.calculate_overlap(gaussian_parms[1],
+        integral_overlap_1 = overlap.calculate_overlap(gaussian_parms[1],
                                                        norm_func=gaussian_parms[0])
+        integral_overlap_2 = overlap.calculate_overlap(gaussian_parms[0],
+                                                       norm_func=gaussian_parms[1])
 
         overlap.plot_gaussian(gaussian_parms[0], gaussian_parms[1],
                               integral_overlap_1, integral_overlap_2)
-
-        plt.savefig('gaussian_dist.pdf', dpi=300)
 
         return integral_overlap_1, integral_overlap_2, gaussian_parms
 
@@ -931,22 +963,6 @@ class Overlap:
 
                 return False
 
-    def get_functions(self, min_int, parms_a, parms_b):
-
-        a, b, c = parms_a
-        p, q, r = parms_b
-
-        lower_point_a = self.gaussian(min_int - 0.1, a, b, c)
-        lower_point_b = self.gaussian(min_int - 0.1, p, q, r)
-
-        assert lower_point_a != lower_point_b
-
-        if lower_point_a < lower_point_b:
-            return parms_a, parms_b
-
-        else:
-            return parms_b, parms_a
-
     def calculate_overlap(self, parms_a, norm_func):
 
         intercepts = self.calc_intercepts(parms_a[0], parms_a[1], parms_a[2],
@@ -985,8 +1001,26 @@ class Overlap:
 
         else:
 
-            func_1_parms, func_2_parms = self.get_functions(intercepts[0],
-                                                            parms_a, norm_func)
+            a, b, c = parms_a
+            p, q, r = norm_func
+            midpoint = (intercepts[0]+intercepts[1]) / 2
+
+            midpoint_a = self.gaussian(midpoint, a, b, c)
+            midpoint_b = self.gaussian(midpoint, p, q, r)
+
+            if midpoint_a == midpoint_b == 0:
+                return NotImplementedError("Midpoints identical and zero")
+
+            elif midpoint_a < midpoint_b:
+                func_1_parms = parms_a
+                func_2_parms = norm_func
+
+            elif midpoint_a > midpoint_b:
+                func_1_parms = norm_func
+                func_2_parms = parms_a
+
+            else:
+                return NotImplementedError("Midpoints identical")
 
             int_lower = self.calculate_area(-np.inf, intercepts[0],
                                             func_1_parms)
@@ -1013,8 +1047,8 @@ class Overlap:
         ax = plt.gca()
         bbox_props = dict(fc="whitesmoke", ec="grey", lw=1)
         plt.text(0.1, 0.9,
-                 f'Overlap to A: {overlap_1:.2f}\n'
-                 f'Overlap to B: {overlap_2:.2f}',
+                 f'Fraction of first Gaussian overlapped: {overlap_1:.2f}\n'
+                 f'Fraction of second Gaussian overlapped: {overlap_2:.2f}',
                  ha='left', va='top',
                  transform=ax.transAxes, size=10, bbox=bbox_props)
 
