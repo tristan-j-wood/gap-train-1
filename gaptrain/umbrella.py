@@ -363,39 +363,21 @@ class UmbrellaSampling:
 
         return traj
 
-    def run_umbrella_sampling(self, traj, temp, dt, interval, num_windows,
-                              pulling_rate=None, **kwargs):
-        """
-        Performs umbrella sampling under a harmonic bias in windows
-        generated from the pulling trajectory
-
-        :param traj: (gaptrain.trajectories.Trajectory)
-
-        :param temp: (float) Temperature in K to use
-
-        :param dt: (float) Timestep in fs
-
-        :param interval: (int) Interval between printing the geometry
-
-        :param num_windows: (int) Number of umbrella sampling windows to run
-
-        :param pulling_rate: (float | None) Rate in Å /fs at which the pull the
-                             system apart. If None, no pulling will occur
-        -------------------------------------------------
-        Keyword Arguments:
-
-            {fs, ps, ns}: Simulation time in some units
-        """
+    def run_umbrella_sampling(self, traj, temp, dt, interval,
+                                  num_windows=10, pulling_rate=None, **kwargs):
+        """Development function for variable K and reference for US"""
 
         if ('ps' and 'ns' and 'fs') not in kwargs:
             raise ValueError("Must specify time in umbrella sampling windows")
 
-        if num_windows < 1:
-            raise ValueError("Must specify more than 1 window")
+        if pulling_rate is not None:
+            logger.error("Pulling rate must be None for umbrella "
+                         "sampling simulations!")
 
-        self.num_windows = num_windows
         init_value = self.reference
         distance = self.final_value - init_value
+
+        self.num_windows = num_windows
         distance_intervals = distance / (self.num_windows - 1)
 
         # Get a dictonary of reaction coordinate distances for each frame
@@ -427,130 +409,6 @@ class UmbrellaSampling:
         combined_traj = Data()
         combined_coords = []
 
-        # Paralellise this but watch out for self.variables
-        for window, frame in enumerate(umbrella_frames):
-            self.pulling_rate = pulling_rate
-
-            if self.pulling_rate is not None:
-                logger.error("Pulling rate must be None for umbrella "
-                             "sampling simulations!")
-
-            window_atoms = frame.ase_atoms()
-            logger.info(f'Running umbrella sampling')
-
-            num_pairs = len(self.coordinate)
-            euclidean_dists = [window_atoms.get_distance(self.coordinate[i][0],
-                                                         self.coordinate[i][1],
-                                                         mic=True)
-                               for i in range(num_pairs)]
-
-            window_reference = (1 / num_pairs) * np.sum(euclidean_dists)
-
-            if self.method == 'gap':
-                self.umbrella_gap.reference = window_reference
-
-                logger.info(f'Window {window} with reference '
-                            f'{self.umbrella_gap.reference:.2f} Å')
-
-                traj = run_umbrella_gapmd(configuration=frame,
-                                          umbrella_gap=self.umbrella_gap,
-                                          temp=temp,
-                                          dt=dt,
-                                          interval=interval,
-                                          save_forces=False,
-                                          **kwargs)
-
-            elif self.method == 'dftb':
-                self.umbrella_dftb.reference = window_reference
-
-                logger.info(f'Window {window} with reference '
-                            f'{self.umbrella_dftb.reference:.2f} Å')
-
-                window_atoms.set_calculator(self.umbrella_dftb)
-                traj = run_umbrella_dftbmd(configuration=frame,
-                                           ase_atoms=window_atoms,
-                                           temp=temp,
-                                           dt=dt,
-                                           interval=interval,
-                                           save_forces=False,
-                                           **kwargs)
-
-            with open(f'window_{window}.txt', 'w') as outfile:
-
-                if self.wham_method == 'grossman':
-                    print(f'# {window_reference}', file=outfile)
-                    for i, configuration in enumerate(traj):
-                        print(f'{i}',
-                              f'{configuration.rxn_coord}',
-                              f'{configuration.energy}', file=outfile)
-
-                elif self.wham_method == 'pywham':
-                    for configuration in traj:
-                        print(f'{configuration.energy}',
-                              f'{configuration.rxn_coord}',
-                              f'{self.umbrella_dftb.reference}', file=outfile)
-
-            with open(f'nd_coord_{window}.txt', 'w') as outfile:
-
-                # Only works with gap currently
-                if self.method == 'gap':
-                    print(f'# {window_reference}', file=outfile)
-                    for i, configuration in enumerate(traj):
-                        print(f'{configuration.nd_coord}', file=outfile)
-
-            combined_traj += traj
-            combined_coords.append([coord.rxn_coord for coord in traj])
-
-        combined_traj.save(filename='combined_windows.xyz')
-
-        self._get_variable_spring(combined_coords)
-
-        return None
-
-    def run_umbrella_sampling_dev(self, traj, temp, dt, interval,
-                                  pulling_rate=None, **kwargs):
-        """Development function for variable K and reference for US"""
-
-        if ('ps' and 'ns' and 'fs') not in kwargs:
-            raise ValueError("Must specify time in umbrella sampling windows")
-
-        if pulling_rate is not None:
-            logger.error("Pulling rate must be None for umbrella "
-                         "sampling simulations!")
-
-        init_value = self.reference
-        distance = self.final_value - init_value
-
-        # Assume 10 windows is the target for development
-        self.num_windows = 10
-        distance_intervals = distance / (self.num_windows - 1)
-
-        # Get a dictonary of reaction coordinate distances for each frame
-        traj_dists = {}
-        for index, frame in enumerate(traj):
-            frame_atoms = frame.ase_atoms()
-            num_pairs = len(self.coordinate)
-            euclidean_dists = [frame_atoms.get_distance(self.coordinate[i][0],
-                                                        self.coordinate[i][1],
-                                                        mic=True)
-                               for i in range(num_pairs)]
-
-            avg_distance = (1 / num_pairs) * np.sum(euclidean_dists)
-            traj_dists[index] = avg_distance
-
-        # Get the initial configurations used in the umbrella sampling windows
-        umbrella_frames = Data()
-        for _ in range(self.num_windows):
-            window_dists = deepcopy(traj_dists)
-
-            for frame_key, dist_value in window_dists.items():
-                window_dists[frame_key] = abs(dist_value - init_value)
-
-            traj_index = min(window_dists.keys(), key=window_dists.get)
-            init_value += distance_intervals
-
-            umbrella_frames.add(traj[traj_index])
-
         def _run_individual_umbrella(frame_config):
 
             window_atoms = frame_config.ase_atoms()
@@ -580,7 +438,6 @@ class UmbrellaSampling:
             # return traj and call self.umbrella_gap.reference
             return traj, window_reference
 
-        win_ref_pair = [None, None]
         gaussian_pair_parms = [None, None]
 
         overlaps_lower, overlaps_upper = [], []
@@ -589,41 +446,59 @@ class UmbrellaSampling:
 
         for window, frame in enumerate(umbrella_frames):
 
+            win_traj, win_ref = _run_individual_umbrella(frame)
+            combined_traj += win_traj
+
+            window_data = [coord.rxn_coord for coord in win_traj]
+            combined_coords.append(window_data)
+
             if window == 0:
-                win_traj, win_ref = _run_individual_umbrella(frame)
-
-                window_data = [coord.rxn_coord for coord in win_traj]
-                win_ref_pair[0] = win_ref
-
                 gaussian_pair_parms[0] = self._fit_gaussian(window_data)
-                logger.info(f'params: {gaussian_pair_parms}')
+
                 ref_discrepancies.append(
-                    gaussian_pair_parms[0][1] - win_ref_pair[0])
+                    gaussian_pair_parms[0][1] - win_ref)
                 standard_deviation.append(gaussian_pair_parms[0][2])
 
             else:
-                win_traj, win_ref = _run_individual_umbrella(frame)
-                window_data = [coord.rxn_coord for coord in win_traj]
-                win_ref_pair[1] = win_ref
-
                 gaussian_pair_parms[1] = self._fit_gaussian(window_data)
                 overlaps = self._get_overlap(gaussian_pair_parms[0],
                                              gaussian_pair_parms[1])
 
                 overlaps_lower.append(overlaps[0])
                 overlaps_upper.append(overlaps[1])
+
                 ref_discrepancies.append(
-                    gaussian_pair_parms[1][1]-win_ref_pair[1])
+                    gaussian_pair_parms[1][1] - win_ref)
                 standard_deviation.append(gaussian_pair_parms[1][2])
 
                 gaussian_pair_parms[0] = gaussian_pair_parms[1]
-                win_ref_pair[0] = win_ref_pair[1]
+
+            if self.wham_method != 'grossman':
+                raise ValueError("PyWham implementation being removed")
+
+            with open(f'window_{window}.txt', 'w') as outfile:
+                print(f'# {win_ref}', file=outfile)
+                for i, configuration in enumerate(win_traj):
+                    print(f'{i}',
+                          f'{configuration.rxn_coord}',
+                          f'{configuration.energy}', file=outfile)
+
+            with open(f'nd_coord_{window}.txt', 'w') as outfile:
+                if self.method == 'gap':
+                    print(f'# {win_ref}', file=outfile)
+                    for i, configuration in enumerate(win_traj):
+                        print(f'{configuration.nd_coord}', file=outfile)
+                else:
+                    logger.error("N-d coordinate printing only implemented"
+                                 "for gap currently")
 
         with open('overlap_data.txt', 'w') as outfile:
             print(f'{overlaps_lower}',
                   f'{overlaps_upper}',
                   f'{ref_discrepancies}',
                   f'{standard_deviation}', file=outfile, sep='\n')
+
+        combined_traj.save(filename='combined_windows.xyz')
 
         return None
 
