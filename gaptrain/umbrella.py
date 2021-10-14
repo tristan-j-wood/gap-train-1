@@ -520,10 +520,10 @@ class UmbrellaSampling:
 
         init_value = self.reference
         distance = self.final_value - init_value
+
         # Assume 10 windows is the target for development
         self.num_windows = 10
         distance_intervals = distance / (self.num_windows - 1)
-        combined_coords = []
 
         # Get a dictonary of reaction coordinate distances for each frame
         traj_dists = {}
@@ -551,9 +551,9 @@ class UmbrellaSampling:
 
             umbrella_frames.add(traj[traj_index])
 
-        def _run_individual_umbrella(window, frame):
+        def _run_individual_umbrella(frame_config):
 
-            window_atoms = frame.ase_atoms()
+            window_atoms = frame_config.ase_atoms()
             logger.info(f'Running umbrella sampling')
 
             num_pairs = len(self.coordinate)
@@ -562,14 +562,14 @@ class UmbrellaSampling:
                                                          mic=True)
                                for i in range(num_pairs)]
 
-            window_reference = (1 / num_pairs) * np.sum(euclidean_dists)
+            window_reference = np.mean(euclidean_dists)
 
             self.umbrella_gap.reference = window_reference
 
             logger.info(f'Window {window} with reference '
                         f'{self.umbrella_gap.reference:.2f} Å')
 
-            traj = run_umbrella_gapmd(configuration=frame,
+            traj = run_umbrella_gapmd(configuration=frame_config,
                                       umbrella_gap=self.umbrella_gap,
                                       temp=temp,
                                       dt=dt,
@@ -577,10 +577,11 @@ class UmbrellaSampling:
                                       save_forces=False,
                                       **kwargs)
 
+            # return traj and call self.umbrella_gap.reference
             return traj, window_reference
 
-        gaussian_pairs = [None, None]
         win_ref_pair = [None, None]
+        gaussian_pair_parms = [None, None]
 
         overlaps_lower, overlaps_upper = [], []
         ref_discrepancies = []
@@ -589,36 +590,36 @@ class UmbrellaSampling:
         for window, frame in enumerate(umbrella_frames):
 
             if window == 0:
-                # Run initial umbrella window
-                window_0_traj, win_ref_0 = _run_individual_umbrella(window=0,
-                                                                    frame=
-                                                                    umbrella_frames[
-                                                                        0])
-                gaussian_pairs[0] = [coord.rxn_coord for coord in
-                                     window_0_traj]
-                win_ref_pair[0] = win_ref_0
+                win_traj, win_ref = _run_individual_umbrella(frame)
+
+                window_data = [coord.rxn_coord for coord in win_traj]
+                win_ref_pair[0] = win_ref
+
+                gaussian_pair_parms[0] = self._fit_gaussian(window_data)
+                logger.info(f'params: {gaussian_pair_parms}')
+                ref_discrepancies.append(
+                    gaussian_pair_parms[0][1] - win_ref_pair[0])
+                standard_deviation.append(gaussian_pair_parms[0][2])
 
             else:
-                win_traj, win_ref = _run_individual_umbrella(window, frame)
-
-                gaussian_pairs[1] = [coord.rxn_coord for coord in win_traj]
+                win_traj, win_ref = _run_individual_umbrella(frame)
+                window_data = [coord.rxn_coord for coord in win_traj]
                 win_ref_pair[1] = win_ref
 
-                gaussian_data = self._get_variable_spring(gaussian_pairs)
-                logger.info(f'Overlap 1: {gaussian_data[0]}')
-                overlaps_lower.append(gaussian_data[0])
-                logger.info(f'Overlap 2: {gaussian_data[1]}')
-                overlaps_upper.append(gaussian_data[1])
-                logger.info(f'Reference discrepency: {gaussian_data[2][1][1]-win_ref_pair[1]}')
-                ref_discrepancies.append(gaussian_data[2][1][1]-win_ref_pair[1])
-                logger.info(f'Standard deviation 1: {gaussian_data[2][0][2]}')
-                logger.info(f'Standard deviation 2: {gaussian_data[2][1][2]}')
-                standard_deviation.append(gaussian_data[2][1][2])
+                gaussian_pair_parms[1] = self._fit_gaussian(window_data)
+                overlaps = self._get_overlap(gaussian_pair_parms[0],
+                                             gaussian_pair_parms[1])
 
-                gaussian_pairs[0] = gaussian_pairs[1]
+                overlaps_lower.append(overlaps[0])
+                overlaps_upper.append(overlaps[1])
+                ref_discrepancies.append(
+                    gaussian_pair_parms[1][1]-win_ref_pair[1])
+                standard_deviation.append(gaussian_pair_parms[1][2])
+
+                gaussian_pair_parms[0] = gaussian_pair_parms[1]
                 win_ref_pair[0] = win_ref_pair[1]
 
-        with open('overlap_data', 'w') as outfile:
+        with open('overlap_data.txt', 'w') as outfile:
             print(f'{overlaps_lower}',
                   f'{overlaps_upper}',
                   f'{ref_discrepancies}',
@@ -778,7 +779,7 @@ class UmbrellaSampling:
         with open("wham.spec.xml", "w") as f:
             f.write(xml_string)
 
-    def _get_variable_spring(self, windows_data):
+    def _fit_gaussian(self, window_data):
 
         def gauss(x, *p):
             a, b, c = p
@@ -787,37 +788,46 @@ class UmbrellaSampling:
         start = min(self.reference, self.final_value)
         end = max(self.reference, self.final_value)
 
+        x_range = np.linspace(start - 0.1 * start, end + 0.1 * end, 500)
+
+        hist, bin_edges = np.histogram(window_data, density=True, bins=500)
+        bin_centres = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+        initial_guess = [1., 0., 1.]
+        parms, _ = curve_fit(gauss, bin_centres, hist, p0=initial_guess,
+                             maxfev=10000)
+        parms[2] = np.abs(parms[2])
+        gaussian_parms = parms.tolist()
+
+        hist_fit = gauss(x_range, *parms)
+
+        plt.plot(bin_centres, hist, label='Test data', alpha=0.1)
+        plt.plot(x_range, hist_fit, label='Fitted data')
+
+        plt.ylabel('Density')
+        plt.xlabel('Reaction coordinate / Å')
+
+        plt.savefig('overlap_gaussians.pdf', dpi=300)
+
+        return gaussian_parms
+
+    def _get_overlap(self, parms_a, parms_b):
+
+        start = min(self.reference, self.final_value)
+        end = max(self.reference, self.final_value)
+
         overlap = Overlap(
-            x_range=np.linspace(start-0.1*start, end+0.1*end, 500)
+            x_range=np.linspace(start - 0.1 * start, end + 0.1 * end, 500)
         )
 
-        gaussian_parms = []
+        integral_overlap_1 = overlap.calculate_overlap(parms_a,
+                                                       norm_func=parms_b)
+        integral_overlap_2 = overlap.calculate_overlap(parms_b,
+                                                       norm_func=parms_a)
 
-        for window_data in windows_data:
+        logger.info(f'Overlaps: {integral_overlap_1}, {integral_overlap_2}')
 
-            hist, bin_edges = np.histogram(window_data, density=True, bins=500)
-            bin_centres = (bin_edges[:-1] + bin_edges[1:]) / 2
-
-            initial_guess = [1., 0., 1.]
-            coeff, _ = curve_fit(gauss, bin_centres, hist, p0=initial_guess,
-                                 maxfev=10000)
-            hist_fit = gauss(bin_centres, *coeff)
-
-            coeff[2] = np.abs(coeff[2])
-            gaussian_parms.append(coeff.tolist())
-
-            plt.plot(bin_centres, hist, label='Test data', alpha=0.1)
-            plt.plot(bin_centres, hist_fit, label='Fitted data')
-
-        integral_overlap_1 = overlap.calculate_overlap(gaussian_parms[1],
-                                                       norm_func=gaussian_parms[0])
-        integral_overlap_2 = overlap.calculate_overlap(gaussian_parms[0],
-                                                       norm_func=gaussian_parms[1])
-
-        overlap.plot_gaussian(gaussian_parms[0], gaussian_parms[1],
-                              integral_overlap_1, integral_overlap_2)
-
-        return integral_overlap_1, integral_overlap_2, gaussian_parms
+        return integral_overlap_1, integral_overlap_2
 
     def __init__(self, init_config=None, method=None, gap=None,
                  coordinate=None, spring_const=None, wham_method='grossman'):
@@ -911,6 +921,7 @@ class UmbrellaSampling:
 
 
 class Overlap:
+    """Docstrings NotImplementedError"""
 
     def gaussian(self, x, a, b, c):
 
@@ -1008,19 +1019,29 @@ class Overlap:
             midpoint_a = self.gaussian(midpoint, a, b, c)
             midpoint_b = self.gaussian(midpoint, p, q, r)
 
-            if midpoint_a == midpoint_b == 0:
-                return NotImplementedError("Midpoints identical and zero")
+            if midpoint_a == midpoint_b:
+                if midpoint_a == 0:
+                    prefactor = (np.sqrt(2*np.pi)*a*p*c*r) / (np.sqrt(c**2+r**2))
+                    exponential = np.exp(-(q**2-2*b*q+b**2) / (2*r**2+2*c**2))
+                    overlap_integral = prefactor * exponential
+
+                    if overlap_integral < 0.01:
+                        overlap = 0
+                        return overlap
+                    else:
+                        logger.info(f'Overlap value: {overlap_integral}')
+                        return NotImplementedError("Overlapping Gaussians")
+
+                else:
+                    return NotImplementedError("Midpoints identical")
 
             elif midpoint_a < midpoint_b:
-                func_1_parms = parms_a
-                func_2_parms = norm_func
-
-            elif midpoint_a > midpoint_b:
                 func_1_parms = norm_func
                 func_2_parms = parms_a
 
             else:
-                return NotImplementedError("Midpoints identical")
+                func_1_parms = parms_a
+                func_2_parms = norm_func
 
             int_lower = self.calculate_area(-np.inf, intercepts[0],
                                             func_1_parms)
@@ -1032,29 +1053,6 @@ class Overlap:
             overlap = (int_lower[0] + int_middle[0] + int_upper[0]) / norm_area
 
             return overlap
-
-    def plot_gaussian(self, parm_1, parm_2, overlap_1, overlap_2):
-
-        func_1 = self.gaussian(self.x_range, parm_1[0], parm_1[1], parm_1[2])
-        func_2 = self.gaussian(self.x_range, parm_2[0], parm_2[1], parm_2[2])
-
-        plt.plot(self.x_range, func_1, label='Gaussian A')
-        plt.plot(self.x_range, func_2, label='Gaussian B')
-
-        plt.ylabel('Density')
-        plt.xlabel('$x$-range')
-
-        ax = plt.gca()
-        bbox_props = dict(fc="whitesmoke", ec="grey", lw=1)
-        plt.text(0.1, 0.9,
-                 f'Fraction of first Gaussian overlapped: {overlap_1:.2f}\n'
-                 f'Fraction of second Gaussian overlapped: {overlap_2:.2f}',
-                 ha='left', va='top',
-                 transform=ax.transAxes, size=10, bbox=bbox_props)
-
-        plt.savefig('overlap_gaussians.pdf', dpi=300)
-
-        return None
 
     def __init__(self, x_range):
 
