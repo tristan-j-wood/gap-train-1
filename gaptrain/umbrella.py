@@ -424,8 +424,9 @@ class UmbrellaSampling:
 
             self.umbrella_gap.reference = window_reference
 
-            logger.info(f'Window {window} with reference '
-                        f'{self.umbrella_gap.reference:.2f} Å')
+            # Add window back in as argument
+            # logger.info(f'Window {window} with reference '
+            #             f'{self.umbrella_gap.reference:.2f} Å')
 
             traj = run_umbrella_gapmd(configuration=frame_config,
                                       umbrella_gap=self.umbrella_gap,
@@ -434,15 +435,40 @@ class UmbrellaSampling:
                                       interval=interval,
                                       save_forces=False,
                                       **kwargs)
+            logger.info(f'Spring constant: {self.spring_const}')
 
             # return traj and call self.umbrella_gap.reference
             return traj, window_reference
 
+        # Convergence testing
+        # conv_parms_list = []
+        # kwargs["fs"] = 1000
+        # for _ in range(20):
+        #     conv_traj, conv_ref = _run_individual_umbrella(umbrella_frames[0])
+        #     conv_data = [coord.rxn_coord for coord in conv_traj]
+        #     conv_parms = self._fit_gaussian(conv_data)
+        #     logger.info(conv_parms)
+        #     conv_parms_list.append(conv_parms)
+        #     kwargs["fs"] += 300
+        #     logger.info(f'time: {kwargs}')
+        #
+        #     # Need to check Gaussians are normalised
+        #
+        # with open('convergence_parms.txt', 'w') as outfile:
+        #     for coeffients in conv_parms_list:
+        #         print(f'{coeffients[0]}',
+        #               f'{coeffients[1]}',
+        #               f'{coeffients[2]}', file=outfile)
+        #
+        # exit("Convergence tested")
+
+        # Gaussian overlap calculations
         gaussian_pair_parms = [None, None]
 
         overlaps_lower, overlaps_upper = [], []
         ref_discrepancies = []
         standard_deviation = []
+        inital_spring = self.spring_const
 
         for window, frame in enumerate(umbrella_frames):
 
@@ -460,9 +486,25 @@ class UmbrellaSampling:
                 standard_deviation.append(gaussian_pair_parms[0][2])
 
             else:
-                gaussian_pair_parms[1] = self._fit_gaussian(window_data)
-                overlaps = self._get_overlap(gaussian_pair_parms[0],
-                                             gaussian_pair_parms[1])
+                for _ in range(4):
+                    gaussian_pair_parms[1] = self._fit_gaussian(window_data)
+                    overlaps = self._get_overlap(gaussian_pair_parms[0],
+                                                 gaussian_pair_parms[1])
+                    # Running loop 4 times as example
+                    if min(overlaps) < 1:
+                        # threshold set to 1 as an example
+                        logger.info(f'Overlap too small ({min(overlaps)}),'
+                                    f' decreasing K')
+                        self.spring_const = self.spring_const * 0.1
+                        # Dimutation of spring constant set to 10% as example
+
+                        win_traj, win_ref = _run_individual_umbrella(frame)
+                        combined_traj += win_traj
+
+                        window_data = [coord.rxn_coord for coord in win_traj]
+                        combined_coords.append(window_data)
+                    else:
+                        logger.info(f'Overlap > 0.1 ({overlaps})')
 
                 overlaps_lower.append(overlaps[0])
                 overlaps_upper.append(overlaps[1])
@@ -472,6 +514,8 @@ class UmbrellaSampling:
                 standard_deviation.append(gaussian_pair_parms[1][2])
 
                 gaussian_pair_parms[0] = gaussian_pair_parms[1]
+
+            self.spring_const = inital_spring
 
             if self.wham_method != 'grossman':
                 raise ValueError("PyWham implementation being removed")
@@ -503,16 +547,13 @@ class UmbrellaSampling:
         return None
 
     def run_wham_analysis(self, temp, num_bins=30, tol=0.00001, numpad=0,
-                          wham_path=None, energy_interval=None,
-                          coord_interval=None, energy_function=None,
-                          temp_interval=0.1, num_MC_trials=0, randSeed=1,
+                          wham_path=None, num_MC_trials=0, randSeed=1,
                           correlation=10):
         """Calculates the Gibbs free energy using the WHAM method"""
 
         assert wham_path is not None
 
         file_list = [f'window_{i}.txt' for i in range(self.num_windows)]
-        temps = [temp for _ in range(self.num_windows)]
 
         if self.wham_method == 'grossman':
 
@@ -538,17 +579,8 @@ class UmbrellaSampling:
                       f'{temp} {numpad} {metadatafile} {freefile} '
                       f'{num_MC_trials} {randSeed}')
 
-        if self.wham_method == 'pywham':
-
-            self._write_xml_file(energy_interval=energy_interval,
-                                 energy_begin=None, energy_end=None,
-                                 coord_begin=None, coord_end=None,
-                                 coord_interval=coord_interval, temp=temps,
-                                 temp_interval=temp_interval,
-                                 file_names=file_list,
-                                 energy_function=energy_function)
-
-            os.system("python2 wham.py wham.spec.xml")
+        else:
+            logger.error("Only grossman WHAM implemented now")
 
         return None
 
@@ -563,96 +595,6 @@ class UmbrellaSampling:
                           f'{ref} ' 
                           f'{self.spring_const} '
                           f'{self.correlation} ', file=outfile)
-
-    def _write_xml_file(self, energy_interval, coord_interval, temp,
-                        temp_interval, file_names, energy_function,
-                        energy_begin=None, energy_end=None, coord_begin=None,
-                        coord_end=None):
-        """Writes the xml input file required for PyWham"""
-
-        if energy_function != 'harmonic':
-            raise NotImplementedError("Only 'harmonic' bias implemented")
-
-        root = ET.Element("WhamSpec")
-        general = ET.SubElement(root, "General")
-
-        # Coordinate block
-        coordinate = ET.SubElement(general, 'Coordinates')
-        ET.SubElement(coordinate, "Coordinate", name="V")
-        ET.SubElement(coordinate, "Coordinate", name="Q")
-
-        # Default Coordinate File Reader Block
-        default_coord = ET.SubElement(general, 'DefaultCoordinateFileReader',
-                                      returnsTime='false')
-        ET.SubElement(default_coord, "ReturnList", name="V")
-        ET.SubElement(default_coord, "ReturnList", name="Q")
-
-        # Binnings block
-        binnings = ET.SubElement(general, 'Binnings')
-        binning_1 = ET.SubElement(binnings, "Binning",
-                                  name="V")
-
-        if (energy_begin and energy_end) is not None:
-            ET.SubElement(binning_1, "Begin").text = f'{energy_begin}'
-            ET.SubElement(binning_1, "End").text = f'{energy_end}'
-
-        ET.SubElement(binning_1, "Interval").text = f'{energy_interval}'
-
-        binning_2 = ET.SubElement(binnings, "Binning",
-                                  name="Q")
-
-        if (coord_begin and coord_end) is not None:
-            ET.SubElement(binning_2, "Begin").text = f'{coord_begin}'
-            ET.SubElement(binning_2, "End").text = f'{coord_end}'
-
-        ET.SubElement(binning_2, "Interval").text = f'{coord_interval}'
-
-        # Trajectories block
-        trajectories = ET.SubElement(root, "Trajectories")
-
-        for i, file_name in enumerate(file_names):
-
-            with open(file_name) as line:
-                ref = line.readline().split()[2]
-
-            function = f'V+0.5*{self.spring_const}*(Q-{ref})**2'
-
-            trajectory_1 = ET.SubElement(trajectories, 'Trajectory',
-                                         T=f'{temp[i]}')
-            ET.SubElement(trajectory_1,
-                          'EnergyFunction').text = function
-            coord_file = ET.SubElement(trajectory_1, 'CoordinateFiles')
-            ET.SubElement(coord_file, 'CoordinateFile').text = f'{file_name}'
-
-        # Jobs block
-        jobs = ET.SubElement(root, "Jobs")
-
-        free_energy = ET.SubElement(jobs, 'FreeEnergy',
-                                    outFilePrefix='free_energy_')
-        coordinates = ET.SubElement(free_energy, 'Coordinates')
-        ET.SubElement(coordinates, 'Coodinate', name='Q')
-        ET.SubElement(free_energy,
-                      'EnergyFunction').text = "V"
-        ET.SubElement(free_energy,
-                      'Temperatures').text = (f'{temp[0]}:{temp_interval}:'
-                                              f'{temp[-1]}')
-        parameters = ET.SubElement(free_energy, 'Parameters')
-        ET.SubElement(parameters, 'Parameter', name="in_kT").text = "true"
-
-        heat_capacity = ET.SubElement(jobs, 'HeatCapacity', outFile='cv.txt')
-        ET.SubElement(heat_capacity,
-                      'EnergyFunction').text = "V"
-        ET.SubElement(heat_capacity,
-                      'Temperatures').text = (f'{temp[0]}:{temp_interval}:'
-                                              f'{temp[-1]}')
-
-        ET.SubElement(jobs, 'DensityOfStates', outFile='dos.txt')
-
-        # Write file with indentation
-        xml_string = minidom.parseString(ET.tostring(root)).toprettyxml(
-            indent="   ")
-        with open("wham.spec.xml", "w") as f:
-            f.write(xml_string)
 
     def _fit_gaussian(self, window_data):
 
@@ -893,6 +835,8 @@ class Overlap:
 
             midpoint_a = self.gaussian(midpoint, a, b, c)
             midpoint_b = self.gaussian(midpoint, p, q, r)
+            logger.info(f'Midpoints: {midpoint}, {midpoint_a}, {midpoint_b}')
+            logger.info(f'Params: {parms_a}, {norm_func}')
 
             if midpoint_a == midpoint_b:
                 if midpoint_a == 0:

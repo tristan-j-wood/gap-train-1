@@ -330,6 +330,8 @@ class UmbrellaGAP(GAP):
         here = os.path.abspath(os.path.dirname(__file__))
         pt = open(os.path.join(here, 'umbrella.py'), 'r').readlines()
 
+        logger.info(f'Spring constant in gap.py (not changed): {self.spring_const}')
+
         pt += [f'gap_pot = {potential_class}("IP GAP", '
                f'param_filename="{self.name}.xml")\n',
                f'coordinate = {self.coordinate}\n',
