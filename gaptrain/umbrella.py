@@ -423,6 +423,7 @@ class UmbrellaSampling:
             window_reference = np.mean(euclidean_dists)
 
             self.umbrella_gap.reference = window_reference
+            self.umbrella_gap.spring_const = self.spring_const
 
             # Add window back in as argument
             # logger.info(f'Window {window} with reference '
@@ -486,17 +487,16 @@ class UmbrellaSampling:
                 standard_deviation.append(gaussian_pair_parms[0][2])
 
             else:
-                for _ in range(4):
+                max_k_iters = 3
+                for interation in range(max_k_iters):
                     gaussian_pair_parms[1] = self._fit_gaussian(window_data)
                     overlaps = self._get_overlap(gaussian_pair_parms[0],
                                                  gaussian_pair_parms[1])
-                    # Running loop 4 times as example
-                    if min(overlaps) < 1:
-                        # threshold set to 1 as an example
+                    # Threshold set to 0.05
+                    if min(overlaps) < 0.05:
                         logger.info(f'Overlap too small ({min(overlaps)}),'
                                     f' decreasing K')
-                        self.spring_const = self.spring_const * 0.1
-                        # Dimutation of spring constant set to 10% as example
+                        self.spring_const = self.spring_const * 0.5
 
                         win_traj, win_ref = _run_individual_umbrella(frame)
                         combined_traj += win_traj
@@ -505,6 +505,7 @@ class UmbrellaSampling:
                         combined_coords.append(window_data)
                     else:
                         logger.info(f'Overlap > 0.1 ({overlaps})')
+                        break
 
                 overlaps_lower.append(overlaps[0])
                 overlaps_upper.append(overlaps[1])
@@ -612,7 +613,7 @@ class UmbrellaSampling:
 
         initial_guess = [1., 0., 1.]
         parms, _ = curve_fit(gauss, bin_centres, hist, p0=initial_guess,
-                             maxfev=10000)
+                             maxfev=50000)
         parms[2] = np.abs(parms[2])
         gaussian_parms = parms.tolist()
 
@@ -831,36 +832,32 @@ class Overlap:
 
             a, b, c = parms_a
             p, q, r = norm_func
-            midpoint = (intercepts[0]+intercepts[1]) / 2
 
-            midpoint_a = self.gaussian(midpoint, a, b, c)
-            midpoint_b = self.gaussian(midpoint, p, q, r)
-            logger.info(f'Midpoints: {midpoint}, {midpoint_a}, {midpoint_b}')
-            logger.info(f'Params: {parms_a}, {norm_func}')
+            if (intercepts[0] < b < intercepts[1]) and (intercepts[0]
+                                                        < q < intercepts[1]):
+                if a > p:
+                    func_1_parms = parms_a
+                    func_2_parms = norm_func
 
-            if midpoint_a == midpoint_b:
-                if midpoint_a == 0:
-                    prefactor = (np.sqrt(2*np.pi)*a*p*c*r) / (np.sqrt(c**2+r**2))
-                    exponential = np.exp(-(q**2-2*b*q+b**2) / (2*r**2+2*c**2))
-                    overlap_integral = prefactor * exponential
-
-                    if overlap_integral < 0.01:
-                        overlap = 0
-                        return overlap
-                    else:
-                        logger.info(f'Overlap value: {overlap_integral}')
-                        return NotImplementedError("Overlapping Gaussians")
+                elif a < p:
+                    func_1_parms = norm_func
+                    func_2_parms = parms_a
 
                 else:
-                    return NotImplementedError("Midpoints identical")
+                    logger.error(
+                        "Could not assign functions to calculate overlap")
 
-            elif midpoint_a < midpoint_b:
+            elif intercepts[0] < b < intercepts[1]:
+                func_1_parms = parms_a
+                func_2_parms = norm_func
+
+            elif intercepts[0] < q < intercepts[1]:
                 func_1_parms = norm_func
                 func_2_parms = parms_a
 
             else:
-                func_1_parms = parms_a
-                func_2_parms = norm_func
+                logger.error(
+                    "Could not assign functions to calculate overlap")
 
             int_lower = self.calculate_area(-np.inf, intercepts[0],
                                             func_1_parms)
