@@ -441,27 +441,31 @@ class UmbrellaSampling:
             # return traj and call self.umbrella_gap.reference
             return traj, window_reference
 
-        # Convergence testing
-        # conv_parms_list = []
-        # kwargs["fs"] = 1000
-        # for _ in range(20):
-        #     conv_traj, conv_ref = _run_individual_umbrella(umbrella_frames[0])
-        #     conv_data = [coord.rxn_coord for coord in conv_traj]
-        #     conv_parms = self._fit_gaussian(conv_data)
-        #     logger.info(conv_parms)
-        #     conv_parms_list.append(conv_parms)
-        #     kwargs["fs"] += 300
-        #     logger.info(f'time: {kwargs}')
-        #
-        #     # Need to check Gaussians are normalised
-        #
-        # with open('convergence_parms.txt', 'w') as outfile:
-        #     for coeffients in conv_parms_list:
-        #         print(f'{coeffients[0]}',
-        #               f'{coeffients[1]}',
-        #               f'{coeffients[2]}', file=outfile)
-        #
-        # exit("Convergence tested")
+        convergence_testing = True
+
+        # Need to make this code a bit more user-flexible
+        if convergence_testing:
+            conv_parms_list = []
+            init_time = kwargs["fs"]
+            kwargs["fs"] = 1000
+            for _ in range(20):
+                conv_traj, conv_ref = _run_individual_umbrella(umbrella_frames[0])
+                conv_data = [coord.rxn_coord for coord in conv_traj]
+                conv_parms = self._fit_gaussian(conv_data)
+                logger.info(conv_parms)
+                conv_parms_list.append(conv_parms)
+                kwargs["fs"] += 300
+                logger.info(f'time: {kwargs}')
+
+            kwargs["fs"] = init_time
+
+            # Need to check Gaussians are normalised
+
+            with open('convergence_parms.txt', 'w') as outfile:
+                for coeffients in conv_parms_list:
+                    print(f'{coeffients[0]}',
+                          f'{coeffients[1]}',
+                          f'{coeffients[2]}', file=outfile)
 
         # Gaussian overlap calculations
         gaussian_pair_parms = [None, None]
@@ -488,12 +492,12 @@ class UmbrellaSampling:
 
             else:
                 max_k_iters = 3
+                threshold = 0.05
                 for interation in range(max_k_iters):
                     gaussian_pair_parms[1] = self._fit_gaussian(window_data)
                     overlaps = self._get_overlap(gaussian_pair_parms[0],
                                                  gaussian_pair_parms[1])
-                    # Threshold set to 0.05
-                    if min(overlaps) < 0.05:
+                    if min(overlaps) < threshold:
                         logger.info(f'Overlap too small ({min(overlaps)}),'
                                     f' decreasing K')
                         self.spring_const = self.spring_const * 0.5
@@ -504,7 +508,7 @@ class UmbrellaSampling:
                         window_data = [coord.rxn_coord for coord in win_traj]
                         combined_coords.append(window_data)
                     else:
-                        logger.info(f'Overlap > 0.1 ({overlaps})')
+                        logger.info(f'Overlap > {threshold} ({overlaps})')
                         break
 
                 overlaps_lower.append(overlaps[0])
