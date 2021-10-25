@@ -606,7 +606,7 @@ class UmbrellaSampling:
                 with open(file, 'r') as infile:
                     line = infile.readline().split()
                     ref = line[1]
-                    spring_cont = line[3]
+                    spring_cont = line[2]
 
                     print(f'{file} '
                           f'{ref} ' 
