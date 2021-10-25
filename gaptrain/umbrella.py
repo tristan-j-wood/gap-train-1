@@ -441,14 +441,14 @@ class UmbrellaSampling:
             # return traj and call self.umbrella_gap.reference
             return traj, window_reference
 
-        convergence_testing = True
+        convergence_testing = False
 
         # Need to make this code a bit more user-flexible
         if convergence_testing:
             conv_parms_list = []
             init_time = kwargs["fs"]
             kwargs["fs"] = 1000
-            for _ in range(20):
+            for _ in range(10):
                 conv_traj, conv_ref = _run_individual_umbrella(umbrella_frames[0])
                 conv_data = [coord.rxn_coord for coord in conv_traj]
                 conv_parms = self._fit_gaussian(conv_data)
@@ -458,7 +458,6 @@ class UmbrellaSampling:
                 logger.info(f'time: {kwargs}')
 
             kwargs["fs"] = init_time
-
             # Need to check Gaussians are normalised
 
             with open('convergence_parms.txt', 'w') as outfile:
@@ -479,6 +478,14 @@ class UmbrellaSampling:
 
             win_traj, win_ref = _run_individual_umbrella(frame)
             combined_traj += win_traj
+            with open(f'window_{self.window_count}.txt', 'w') as outfile:
+                print(f'# {win_ref} {self.spring_const} {self.window_count}',
+                      file=outfile)
+                for i, configuration in enumerate(win_traj):
+                    print(f'{i}',
+                          f'{configuration.rxn_coord}',
+                          f'{configuration.energy}', file=outfile)
+            self.window_count += 1
 
             window_data = [coord.rxn_coord for coord in win_traj]
             combined_coords.append(window_data)
@@ -493,6 +500,7 @@ class UmbrellaSampling:
             else:
                 max_k_iters = 3
                 threshold = 0.05
+
                 for interation in range(max_k_iters):
                     gaussian_pair_parms[1] = self._fit_gaussian(window_data)
                     overlaps = self._get_overlap(gaussian_pair_parms[0],
@@ -504,6 +512,16 @@ class UmbrellaSampling:
 
                         win_traj, win_ref = _run_individual_umbrella(frame)
                         combined_traj += win_traj
+                        with open(f'window_{self.window_count}.txt',
+                                  'w') as outfile:
+                            print(
+                                f'# {win_ref} {self.spring_const} {self.window_count}',
+                                file=outfile)
+                            for i, configuration in enumerate(win_traj):
+                                print(f'{i}',
+                                      f'{configuration.rxn_coord}',
+                                      f'{configuration.energy}', file=outfile)
+                        self.window_count += 1
 
                         window_data = [coord.rxn_coord for coord in win_traj]
                         combined_coords.append(window_data)
@@ -520,26 +538,18 @@ class UmbrellaSampling:
 
                 gaussian_pair_parms[0] = gaussian_pair_parms[1]
 
-            self.spring_const = inital_spring
+            logger.info(f'Window count: {self.window_count}')
 
-            if self.wham_method != 'grossman':
-                raise ValueError("PyWham implementation being removed")
-
-            with open(f'window_{window}.txt', 'w') as outfile:
-                print(f'# {win_ref}', file=outfile)
-                for i, configuration in enumerate(win_traj):
-                    print(f'{i}',
-                          f'{configuration.rxn_coord}',
-                          f'{configuration.energy}', file=outfile)
-
-            with open(f'nd_coord_{window}.txt', 'w') as outfile:
+            with open(f'nd_coord_{self.window_count}.txt', 'w') as outfile:
                 if self.method == 'gap':
-                    print(f'# {win_ref}', file=outfile)
+                    print(f'# {win_ref} {self.window_count}', file=outfile)
                     for i, configuration in enumerate(win_traj):
                         print(f'{configuration.nd_coord}', file=outfile)
                 else:
                     logger.error("N-d coordinate printing only implemented"
                                  "for gap currently")
+
+            self.spring_const = inital_spring
 
         with open('overlap_data.txt', 'w') as outfile:
             print(f'{overlaps_lower}',
@@ -558,7 +568,7 @@ class UmbrellaSampling:
 
         assert wham_path is not None
 
-        file_list = [f'window_{i}.txt' for i in range(self.num_windows)]
+        file_list = [f'window_{i}.txt' for i in range(self.window_count)]
 
         if self.wham_method == 'grossman':
 
@@ -594,11 +604,13 @@ class UmbrellaSampling:
 
             for file in file_names:
                 with open(file, 'r') as infile:
-                    ref = infile.readline().split()[1]
+                    line = infile.readline().split()
+                    ref = line[1]
+                    spring_cont = line[3]
 
                     print(f'{file} '
                           f'{ref} ' 
-                          f'{self.spring_const} '
+                          f'{spring_cont} '
                           f'{self.correlation} ', file=outfile)
 
     def _fit_gaussian(self, window_data):
@@ -615,9 +627,9 @@ class UmbrellaSampling:
         hist, bin_edges = np.histogram(window_data, density=True, bins=500)
         bin_centres = (bin_edges[:-1] + bin_edges[1:]) / 2
 
-        initial_guess = [1., 0., 1.]
+        initial_guess = [1.0, 1.0, 1.0]
         parms, _ = curve_fit(gauss, bin_centres, hist, p0=initial_guess,
-                             maxfev=50000)
+                             maxfev=10000)
         parms[2] = np.abs(parms[2])
         gaussian_parms = parms.tolist()
 
@@ -740,6 +752,7 @@ class UmbrellaSampling:
         self.num_windows = None
         self.correlation = None
         self.simulation_time = None
+        self.window_count = 0
 
 
 class Overlap:
