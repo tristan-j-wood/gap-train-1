@@ -498,14 +498,12 @@ class UmbrellaSampling:
                 standard_deviation.append(gaussian_pair_parms[0][2])
 
             else:
-                max_k_iters = 3
-                threshold = 0.05
 
-                for interation in range(max_k_iters):
+                for interation in range(self.max_k_iters):
                     gaussian_pair_parms[1] = self._fit_gaussian(window_data)
                     overlaps = self._get_overlap(gaussian_pair_parms[0],
                                                  gaussian_pair_parms[1])
-                    if min(overlaps) < threshold:
+                    if min(overlaps) < self.overlap_threshold:
                         logger.info(f'Overlap too small ({min(overlaps)}),'
                                     f' decreasing K')
                         self.spring_const = self.spring_const * 0.5
@@ -515,7 +513,8 @@ class UmbrellaSampling:
                         with open(f'window_{self.window_count}.txt',
                                   'w') as outfile:
                             print(
-                                f'# {win_ref} {self.spring_const} {self.window_count}',
+                                f'# {win_ref} {self.spring_const} '
+                                f'{self.window_count}',
                                 file=outfile)
                             for i, configuration in enumerate(win_traj):
                                 print(f'{i}',
@@ -526,7 +525,8 @@ class UmbrellaSampling:
                         window_data = [coord.rxn_coord for coord in win_traj]
                         combined_coords.append(window_data)
                     else:
-                        logger.info(f'Overlap > {threshold} ({overlaps})')
+                        logger.info(f'Overlap > {self.overlap_threshold} '
+                                    f'({overlaps})')
                         break
 
                 overlaps_lower.append(overlaps[0])
@@ -570,32 +570,27 @@ class UmbrellaSampling:
 
         file_list = [f'window_{i}.txt' for i in range(self.window_count)]
 
-        if self.wham_method == 'grossman':
+        self.correlation = correlation
 
-            self.correlation = correlation
-
-            if self.pulling_simulation:
-                hist_min = self.reference
-                hist_max = self.final_value
-
-            else:
-                hist_max = self.reference
-                hist_min = self.final_value
-
-            metadatafile = 'metadata.txt'
-            freefile = 'free_energy.txt'
-
-            self._write_metafile(file_list)
-
-            logger.warning('Ensure that the units in the Grossman WHAM '
-                           'implementation are in eV')
-
-            os.system(f'{wham_path} {hist_min} {hist_max} {num_bins} {tol} '
-                      f'{temp} {numpad} {metadatafile} {freefile} '
-                      f'{num_MC_trials} {randSeed}')
+        if self.pulling_simulation:
+            hist_min = self.reference
+            hist_max = self.final_value
 
         else:
-            logger.error("Only grossman WHAM implemented now")
+            hist_max = self.reference
+            hist_min = self.final_value
+
+        metadatafile = 'metadata.txt'
+        freefile = 'free_energy.txt'
+
+        self._write_metafile(file_list)
+
+        logger.warning('Ensure that the units in the Grossman WHAM '
+                       'implementation are in eV')
+
+        os.system(f'{wham_path} {hist_min} {hist_max} {num_bins} {tol} '
+                  f'{temp} {numpad} {metadatafile} {freefile} '
+                  f'{num_MC_trials} {randSeed}')
 
         return None
 
@@ -664,7 +659,8 @@ class UmbrellaSampling:
         return integral_overlap_1, integral_overlap_2
 
     def __init__(self, init_config=None, method=None, gap=None,
-                 coordinate=None, spring_const=None, wham_method='grossman'):
+                 coordinate=None, spring_const=None, max_k_iters=3,
+                 overlap_threshold=0.05):
         """
         :param init_config: (gaptrain.configurations.Configuration | None)
 
@@ -679,8 +675,11 @@ class UmbrellaSampling:
         :param spring_const: (float | None) Value of the spring constant, K,
                               used in umbrella sampling
 
-        :param wham_method: (str) Method to use when performing WHAM. PyWham
-                    and Grossman Wham currently implemented.
+        :param max_k_iters: (int) Number of cycles to modify K to improve the
+                            overlap
+
+        :param overlap_threshold: (float) Threshold above which the overlap is
+                                  acceptable
         """
 
         if any(isinstance(el, list) for el in coordinate):
@@ -742,9 +741,6 @@ class UmbrellaSampling:
         else:
             raise ValueError("Method must be in ['dftb', 'gap]")
 
-        assert wham_method in ['grossman', 'pywham']
-        self.wham_method = wham_method
-
         self.coordinate = coordinate
         self.final_value = None
         self.pulling_rate = None
@@ -753,6 +749,8 @@ class UmbrellaSampling:
         self.correlation = None
         self.simulation_time = None
         self.window_count = 0
+        self.max_k_iters = max_k_iters
+        self.overlap_threshold = overlap_threshold
 
 
 class Overlap:
