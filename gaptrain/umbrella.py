@@ -7,8 +7,6 @@ from gaptrain.data import Data
 from gaptrain.log import logger
 from ase.atoms import Atoms
 import numpy as np
-import xml.etree.cElementTree as ET
-from xml.dom import minidom
 import os
 from copy import deepcopy
 from scipy.optimize import curve_fit
@@ -40,16 +38,6 @@ def _get_mpair_distance_derivative(atoms, indx, ref):
         derivitive_vector[pair[1]][:] = [-x_i, -y_i, -z_i]
 
     return derivitive_vector
-
-
-def _get_torsion_derivative(atoms, indexes, reference):
-
-    return NotImplementedError
-
-
-def _get_rmsd_derivative(atoms, indexes, reference):
-
-    return NotImplementedError
 
 
 class RxnCoordinateAtoms(Atoms):
@@ -363,22 +351,12 @@ class UmbrellaSampling:
 
         return traj
 
-    def run_umbrella_sampling(self, traj, temp, dt, interval,
-                                  num_windows=10, pulling_rate=None, **kwargs):
-        """Development function for variable K and reference for US"""
+    def _get_window_frames(self, traj):
+        """Returns the set of frames to use in the umbrella sampling windows"""
 
-        if ('ps' and 'ns' and 'fs') not in kwargs:
-            raise ValueError("Must specify time in umbrella sampling windows")
-
-        if pulling_rate is not None:
-            logger.error("Pulling rate must be None for umbrella "
-                         "sampling simulations!")
-
-        init_value = self.reference
-        distance = self.final_value - init_value
-
-        self.num_windows = num_windows
-        distance_intervals = distance / (self.num_windows - 1)
+        init_ref_value = self.reference
+        distance_range = self.final_value - init_ref_value
+        distance_intervals = distance_range / (self.num_windows - 1)
 
         # Get a dictonary of reaction coordinate distances for each frame
         traj_dists = {}
@@ -399,167 +377,272 @@ class UmbrellaSampling:
             window_dists = deepcopy(traj_dists)
 
             for frame_key, dist_value in window_dists.items():
-                window_dists[frame_key] = abs(dist_value - init_value)
+                window_dists[frame_key] = abs(dist_value - init_ref_value)
 
             traj_index = min(window_dists.keys(), key=window_dists.get)
-            init_value += distance_intervals
-
             umbrella_frames.add(traj[traj_index])
+
+            init_ref_value += distance_intervals
+
+        return umbrella_frames
+
+    def _run_individual_window(self, frame, temp, interval, dt, **kwargs):
+        """Runs an individual umbrella sampling window"""
+
+        # Change frame.config name
+        window_atoms = frame.ase_atoms()
+        num_pairs = len(self.coordinate)
+
+        euclidean_dists = [window_atoms.get_distance(self.coordinate[i][0],
+                                                     self.coordinate[i][1],
+                                                     mic=True)
+                           for i in range(num_pairs)]
+
+        self.umbrella_gap.reference = np.mean(euclidean_dists)
+        self.umbrella_gap.spring_const = self.spring_const
+
+        logger.info(f'Running umbrella sampling window with reference '
+                    f'{self.umbrella_gap.reference}')
+
+        traj = run_umbrella_gapmd(configuration=frame,
+                                  umbrella_gap=self.umbrella_gap,
+                                  temp=temp,
+                                  dt=dt,
+                                  interval=interval,
+                                  save_forces=False,
+                                  **kwargs)
+
+        return traj
+
+    def _test_convergence(self):
+
+        return NotImplementedError
+
+    def run_umbrella_sampling(self, traj, temp, dt, interval, num_windows=10,
+                              pulling_rate=None, disc_threshold=None,
+                              overlap_threshold=0.05, **kwargs):
+        """Run umbrella sampling across n windows. Self-adjusting K and
+        reference implemented"""
+
+        if ('ps' and 'ns' and 'fs') not in kwargs:
+            raise ValueError("Must specify time in umbrella sampling windows")
+
+        if pulling_rate is not None:
+            logger.error("Pulling rate must be None for umbrella "
+                         "sampling simulations!")
+
+        assert disc_threshold is not None
+        self.disc_threshold = disc_threshold
+        self.overlap_threshold = overlap_threshold
+        self.num_windows = num_windows
+
+        gaussian_parms = [None, None]
+        overlaps_lower, overlaps_upper, ref_discrep, stan_dev = [], [], [], []
 
         combined_traj = Data()
         combined_coords = []
 
-        def _run_individual_umbrella(frame_config):
-
-            window_atoms = frame_config.ase_atoms()
-            logger.info(f'Running umbrella sampling')
-
-            num_pairs = len(self.coordinate)
-            euclidean_dists = [window_atoms.get_distance(self.coordinate[i][0],
-                                                         self.coordinate[i][1],
-                                                         mic=True)
-                               for i in range(num_pairs)]
-
-            window_reference = np.mean(euclidean_dists)
-
-            self.umbrella_gap.reference = window_reference
-            self.umbrella_gap.spring_const = self.spring_const
-
-            # Add window back in as argument
-            # logger.info(f'Window {window} with reference '
-            #             f'{self.umbrella_gap.reference:.2f} Å')
-
-            traj = run_umbrella_gapmd(configuration=frame_config,
-                                      umbrella_gap=self.umbrella_gap,
-                                      temp=temp,
-                                      dt=dt,
-                                      interval=interval,
-                                      save_forces=False,
-                                      **kwargs)
-            logger.info(f'Spring constant: {self.spring_const}')
-
-            # return traj and call self.umbrella_gap.reference
-            return traj, window_reference
-
-        convergence_testing = False
-
-        # Need to make this code a bit more user-flexible
-        if convergence_testing:
-            conv_parms_list = []
-            init_time = kwargs["fs"]
-            kwargs["fs"] = 1000
-            for _ in range(10):
-                conv_traj, conv_ref = _run_individual_umbrella(umbrella_frames[0])
-                conv_data = [coord.rxn_coord for coord in conv_traj]
-                conv_parms = self._fit_gaussian(conv_data)
-                logger.info(conv_parms)
-                conv_parms_list.append(conv_parms)
-                kwargs["fs"] += 300
-                logger.info(f'time: {kwargs}')
-
-            kwargs["fs"] = init_time
-            # Need to check Gaussians are normalised
-
-            with open('convergence_parms.txt', 'w') as outfile:
-                for coeffients in conv_parms_list:
-                    print(f'{coeffients[0]}',
-                          f'{coeffients[1]}',
-                          f'{coeffients[2]}', file=outfile)
-
-        # Gaussian overlap calculations
-        gaussian_pair_parms = [None, None]
-
-        overlaps_lower, overlaps_upper = [], []
-        ref_discrepancies = []
-        standard_deviation = []
+        umbrella_frames = self._get_window_frames(traj)
         inital_spring = self.spring_const
 
-        for window, frame in enumerate(umbrella_frames):
+        for window_index, frame in enumerate(umbrella_frames):
 
-            win_traj, win_ref = _run_individual_umbrella(frame)
+            self.previous_ref = self.umbrella_gap.reference
+            logger.info(f'Previous reference: {self.previous_ref}')
+
+            win_traj = self._run_individual_window(frame, temp, interval, dt,
+                                                   **kwargs)
+            logger.info(f'Current reference: {self.umbrella_gap.reference}')
             combined_traj += win_traj
+
             with open(f'window_{self.window_count}.txt', 'w') as outfile:
-                print(f'# {win_ref} {self.spring_const} {self.window_count}',
-                      file=outfile)
-                for i, configuration in enumerate(win_traj):
-                    print(f'{i}',
+                print(f'# {self.umbrella_gap.reference} {self.spring_const} '
+                      f'{self.window_count}', file=outfile)
+                for frame_num, configuration in enumerate(win_traj):
+                    print(f'{frame_num}',
                           f'{configuration.rxn_coord}',
                           f'{configuration.energy}', file=outfile)
+
             self.window_count += 1
 
-            window_data = [coord.rxn_coord for coord in win_traj]
-            combined_coords.append(window_data)
+            win_data = [coord.rxn_coord for coord in win_traj]
+            combined_coords.append(win_data)
 
-            if window == 0:
-                gaussian_pair_parms[0] = self._fit_gaussian(window_data)
+            if window_index == 0:
+                gaussian_parms[0] = self._fit_gaussian(win_data)
+                discrepency = gaussian_parms[0][1] - self.umbrella_gap.reference
 
-                ref_discrepancies.append(
-                    gaussian_pair_parms[0][1] - win_ref)
-                standard_deviation.append(gaussian_pair_parms[0][2])
+                ref_discrep.append(discrepency)
+                stan_dev.append(gaussian_parms[0][2])
 
             else:
+                gaussian_parms[1] = self._fit_gaussian(win_data)
+                overlaps = self._get_overlap(gaussian_parms[0],
+                                             gaussian_parms[1])
 
-                for interation in range(self.max_k_iters):
-                    gaussian_pair_parms[1] = self._fit_gaussian(window_data)
-                    overlaps = self._get_overlap(gaussian_pair_parms[0],
-                                                 gaussian_pair_parms[1])
-                    if min(overlaps) < self.overlap_threshold:
-                        logger.info(f'Overlap too small ({min(overlaps)}),'
-                                    f' decreasing K')
-                        self.spring_const = self.spring_const * 0.5
+                discrepency = abs(
+                    gaussian_parms[0][1] - self.umbrella_gap.reference)
 
-                        win_traj, win_ref = _run_individual_umbrella(frame)
-                        combined_traj += win_traj
-                        with open(f'window_{self.window_count}.txt',
-                                  'w') as outfile:
-                            print(
-                                f'# {win_ref} {self.spring_const} '
-                                f'{self.window_count}',
-                                file=outfile)
-                            for i, configuration in enumerate(win_traj):
-                                print(f'{i}',
-                                      f'{configuration.rxn_coord}',
-                                      f'{configuration.energy}', file=outfile)
-                        self.window_count += 1
+                traj = self._modify_window_parms(discrepency, min(overlaps),
+                                                 frame, gaussian_parms,
+                                                 temp, interval, dt, **kwargs)
+                self.window_count += 1
 
-                        window_data = [coord.rxn_coord for coord in win_traj]
-                        combined_coords.append(window_data)
-                    else:
-                        logger.info(f'Overlap > {self.overlap_threshold} '
-                                    f'({overlaps})')
-                        break
+                if traj is None:
+                    logger.info(f'Overlap ({min(overlaps)}) and discrepency '
+                                f'({discrepency}) below thresholds')
+                    break
 
-                overlaps_lower.append(overlaps[0])
-                overlaps_upper.append(overlaps[1])
-
-                ref_discrepancies.append(
-                    gaussian_pair_parms[1][1] - win_ref)
-                standard_deviation.append(gaussian_pair_parms[1][2])
-
-                gaussian_pair_parms[0] = gaussian_pair_parms[1]
-
-            logger.info(f'Window count: {self.window_count}')
-
-            with open(f'nd_coord_{self.window_count}.txt', 'w') as outfile:
-                if self.method == 'gap':
-                    print(f'# {win_ref} {self.window_count}', file=outfile)
-                    for i, configuration in enumerate(win_traj):
-                        print(f'{configuration.nd_coord}', file=outfile)
                 else:
-                    logger.error("N-d coordinate printing only implemented"
-                                 "for gap currently")
+                    combined_traj += traj
+
+                    with open(f'window_{self.window_count}.txt',
+                              'w') as outfile:
+                        print(f'# {self.umbrella_gap.reference} '
+                              f'{self.spring_const}', file=outfile)
+
+                        for frame_num, configuration in enumerate(
+                                traj):
+                            print(f'{frame_num}',
+                                  f'{configuration.rxn_coord}',
+                                  f'{configuration.energy}', file=outfile)
+
+                    win_data = [coord.rxn_coord for coord in traj]
+                    combined_coords.append(win_data)
+
+                gaussian_parms[0] = gaussian_parms[1]
+
+                logger.info(f'Window count: {self.window_count}')
 
             self.spring_const = inital_spring
-
-        with open('overlap_data.txt', 'w') as outfile:
-            print(f'{overlaps_lower}',
-                  f'{overlaps_upper}',
-                  f'{ref_discrepancies}',
-                  f'{standard_deviation}', file=outfile, sep='\n')
+            # Need to add in overlap data for graphs etc
 
         combined_traj.save(filename='combined_windows.xyz')
 
         return None
+
+    def _modify_window_parms(self, disc, overlap, frame, gaussian_parms, temp,
+                             interval, dt, **kwargs):
+
+        if (disc > self.disc_threshold and overlap >
+            self.overlap_threshold) or (disc > self.disc_threshold and
+                                        overlap < self.overlap_threshold):
+            iters = 0
+            max_iters = 5
+
+            while iters <= max_iters:
+                self.spring_const *= 1
+
+                win_traj = self._run_individual_window(frame, temp, interval,
+                                                       dt, **kwargs)
+                win_data = [coord.rxn_coord for coord in win_traj]
+                # Maybe add these trajectories to combined trajectories
+
+                gaussian_parms[1] = self._fit_gaussian(win_data)
+                discrepency = abs(
+                    gaussian_parms[0][1] - self.umbrella_gap.reference)
+
+                if discrepency > self.disc_threshold:
+                    logger.info(f'Discrepancy ({discrepency}) > threshold '
+                                f'({self.disc_threshold}). Increasing K')
+                    iters += 1
+
+                    if iters == max_iters:
+                        logger.info(f'Could not converge to target reference '
+                                    f'value')
+                    continue
+
+                else:
+                    logger.info(f'Discrepancy ({discrepency}) <= threshold '
+                                f'({self.disc_threshold}). Checking overlap')
+                    break
+
+            overlaps = self._get_overlap(gaussian_parms[0], gaussian_parms[1])
+
+            if min(overlaps) >= self.overlap_threshold:
+                logger.info(f'Overlap sufficiently big ({min(overlaps)}. '
+                            f'Returning trajectory')
+
+                return win_traj
+
+            else:
+                # Want to eventually change this so that the overlap determines
+                # the new reference value
+                ref_diff = abs(self.umbrella_gap.reference - self.previous_ref)
+                self.umbrella_gap.reference = ref_diff * 1 + self.previous_ref
+
+                win_traj = self._run_individual_window(frame, temp, interval,
+                                                       dt, **kwargs)
+                win_data = [coord.rxn_coord for coord in win_traj]
+
+                gaussian_parms[1] = self._fit_gaussian(win_data)
+                overlaps = self._get_overlap(gaussian_parms[0],
+                                             gaussian_parms[1])
+                if min(overlaps) >= self.overlap_threshold:
+                    logger.info(f'Reference shifted and overlap sufficiently '
+                                f'big ({min(overlaps)}. Returning trajectory')
+
+                    return win_traj
+                else:
+                    logger.info(f'Overlap too small even after shifted '
+                                f'reference. Giving up and returning '
+                                f'trajectory')
+
+                return win_traj
+
+        elif disc < self.disc_threshold and overlap < self.overlap_threshold:
+
+            iters = 0
+            max_iters = 5
+
+            while iters <= max_iters:
+                self.spring_const *= 1
+
+                win_traj = self._run_individual_window(frame, temp, interval,
+                                                       dt, **kwargs)
+                win_data = [coord.rxn_coord for coord in win_traj]
+                # Maybe add these trajectories to combined trajectories
+
+                gaussian_parms[1] = self._fit_gaussian(win_data)
+                discrepency = abs(
+                    gaussian_parms[0][1] - self.umbrella_gap.reference)
+
+                if discrepency < self.disc_threshold:
+                    logger.info(f'Discrepancy below threshold ({discrepency}).'
+                                f' Returning trajectory')
+
+                    return win_traj
+
+                else:
+                    # Want to eventually change this so that the overlap
+                    # determines the new reference value
+                    ref_diff = abs(
+                        self.umbrella_gap.reference - self.previous_ref)
+                    self.umbrella_gap.reference = ref_diff * 1 + self.previous_ref
+
+                    win_traj = self._run_individual_window(frame, temp,
+                                                           interval, dt,
+                                                           **kwargs)
+                    win_data = [coord.rxn_coord for coord in win_traj]
+
+                    gaussian_parms[1] = self._fit_gaussian(win_data)
+                    overlaps = self._get_overlap(gaussian_parms[0],
+                                                 gaussian_parms[1])
+                    if min(overlaps) >= self.overlap_threshold:
+                        logger.info(
+                            f'Reference shifted and overlap sufficiently '
+                            f'big ({min(overlaps)}. Returning trajectory')
+
+                        return win_traj
+                    else:
+                        logger.info(f'Overlap too small even after shifted '
+                                    f'reference. Giving up and returning '
+                                    f'trajectory')
+
+                    return win_traj
+
+        else:
+            return None
 
     def run_wham_analysis(self, temp, num_bins=30, tol=0.00001, numpad=0,
                           wham_path=None, num_MC_trials=0, randSeed=1,
@@ -744,7 +827,10 @@ class UmbrellaSampling:
         self.coordinate = coordinate
         self.final_value = None
         self.pulling_rate = None
+        self.previous_ref = None
         self.pulling_simulation = True
+        self.disc_threshold = None
+        self.overlap_threshold = 0.05
         self.num_windows = None
         self.correlation = None
         self.simulation_time = None
