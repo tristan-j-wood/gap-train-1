@@ -402,7 +402,8 @@ class UmbrellaSampling:
         self.umbrella_gap.spring_const = self.spring_const
 
         logger.info(f'Running umbrella sampling window with reference '
-                    f'{self.umbrella_gap.reference}')
+                    f'{self.umbrella_gap.reference:.2f} and spring constant '
+                    f'{self.spring_const}')
 
         traj = run_umbrella_gapmd(configuration=frame,
                                   umbrella_gap=self.umbrella_gap,
@@ -420,7 +421,8 @@ class UmbrellaSampling:
 
     def run_umbrella_sampling(self, traj, temp, dt, interval, num_windows=10,
                               pulling_rate=None, disc_threshold=None,
-                              overlap_threshold=0.05, **kwargs):
+                              overlap_threshold=0.05, adjust_sampling=False,
+                              **kwargs):
         """Run umbrella sampling across n windows. Self-adjusting K and
         reference implemented"""
 
@@ -448,11 +450,10 @@ class UmbrellaSampling:
         for window_index, frame in enumerate(umbrella_frames):
 
             self.previous_ref = self.umbrella_gap.reference
-            logger.info(f'Previous reference: {self.previous_ref}')
 
             win_traj = self._run_individual_window(frame, temp, interval, dt,
                                                    **kwargs)
-            logger.info(f'Current reference: {self.umbrella_gap.reference}')
+            logger.info(f'Current reference: {self.umbrella_gap.reference:.2f}')
             combined_traj += win_traj
 
             with open(f'window_{self.window_count}.txt', 'w') as outfile:
@@ -483,17 +484,12 @@ class UmbrellaSampling:
                 discrepency = abs(
                     gaussian_parms[0][1] - self.umbrella_gap.reference)
 
-                traj = self._modify_window_parms(discrepency, min(overlaps),
-                                                 frame, gaussian_parms,
-                                                 temp, interval, dt, **kwargs)
-                self.window_count += 1
+                if adjust_sampling:
+                    traj = self._modify_window_parms(discrepency, min(overlaps),
+                                                     frame, gaussian_parms,
+                                                     temp, interval, dt, **kwargs)
+                    self.window_count += 1
 
-                if traj is None:
-                    logger.info(f'Overlap ({min(overlaps)}) and discrepency '
-                                f'({discrepency}) below thresholds')
-                    break
-
-                else:
                     combined_traj += traj
 
                     with open(f'window_{self.window_count}.txt',
@@ -510,9 +506,12 @@ class UmbrellaSampling:
                     win_data = [coord.rxn_coord for coord in traj]
                     combined_coords.append(win_data)
 
-                gaussian_parms[0] = gaussian_parms[1]
+                else:
+                    logger.info(f'Overlap ({min(overlaps):.2f}) and '
+                                f'discrepency ({discrepency:.2f}) below '
+                                f'thresholds')
 
-                logger.info(f'Window count: {self.window_count}')
+                gaussian_parms[0] = gaussian_parms[1]
 
             self.spring_const = inital_spring
             # Need to add in overlap data for graphs etc
@@ -524,11 +523,12 @@ class UmbrellaSampling:
     def _modify_window_parms(self, disc, overlap, frame, gaussian_parms, temp,
                              interval, dt, **kwargs):
 
+        max_iters = 1
+        iters = 1
+
         if (disc > self.disc_threshold and overlap >
             self.overlap_threshold) or (disc > self.disc_threshold and
                                         overlap < self.overlap_threshold):
-            iters = 0
-            max_iters = 5
 
             while iters <= max_iters:
                 self.spring_const *= 1
@@ -543,24 +543,25 @@ class UmbrellaSampling:
                     gaussian_parms[0][1] - self.umbrella_gap.reference)
 
                 if discrepency > self.disc_threshold:
-                    logger.info(f'Discrepancy ({discrepency}) > threshold '
-                                f'({self.disc_threshold}). Increasing K')
+                    logger.info(f'Discrepancy ({discrepency:.2f}) > threshold '
+                                f'({self.disc_threshold:.2f}). Increasing K')
                     iters += 1
 
                     if iters == max_iters:
                         logger.info(f'Could not converge to target reference '
                                     f'value')
-                    continue
+                    break
 
                 else:
-                    logger.info(f'Discrepancy ({discrepency}) <= threshold '
-                                f'({self.disc_threshold}). Checking overlap')
+                    logger.info(f'Discrepancy ({discrepency:.2f}) <= threshold'
+                                f' ({self.disc_threshold:.2f}). Checking '
+                                f'overlap')
                     break
 
             overlaps = self._get_overlap(gaussian_parms[0], gaussian_parms[1])
 
             if min(overlaps) >= self.overlap_threshold:
-                logger.info(f'Overlap sufficiently big ({min(overlaps)}. '
+                logger.info(f'Overlap sufficiently big ({min(overlaps):.2f}. '
                             f'Returning trajectory')
 
                 return win_traj
@@ -580,7 +581,8 @@ class UmbrellaSampling:
                                              gaussian_parms[1])
                 if min(overlaps) >= self.overlap_threshold:
                     logger.info(f'Reference shifted and overlap sufficiently '
-                                f'big ({min(overlaps)}. Returning trajectory')
+                                f'big ({min(overlaps):.2f}. Returning '
+                                f'trajectory')
 
                     return win_traj
                 else:
@@ -591,9 +593,6 @@ class UmbrellaSampling:
                 return win_traj
 
         elif disc < self.disc_threshold and overlap < self.overlap_threshold:
-
-            iters = 0
-            max_iters = 5
 
             while iters <= max_iters:
                 self.spring_const *= 1
@@ -608,8 +607,8 @@ class UmbrellaSampling:
                     gaussian_parms[0][1] - self.umbrella_gap.reference)
 
                 if discrepency < self.disc_threshold:
-                    logger.info(f'Discrepancy below threshold ({discrepency}).'
-                                f' Returning trajectory')
+                    logger.info(f'Discrepancy below threshold '
+                                f'({discrepency}:.2f). Returning trajectory')
 
                     return win_traj
 
@@ -631,7 +630,7 @@ class UmbrellaSampling:
                     if min(overlaps) >= self.overlap_threshold:
                         logger.info(
                             f'Reference shifted and overlap sufficiently '
-                            f'big ({min(overlaps)}. Returning trajectory')
+                            f'big ({min(overlaps):.2f}. Returning trajectory')
 
                         return win_traj
                     else:
@@ -736,8 +735,6 @@ class UmbrellaSampling:
                                                        norm_func=parms_b)
         integral_overlap_2 = overlap.calculate_overlap(parms_b,
                                                        norm_func=parms_a)
-
-        logger.info(f'Overlaps: {integral_overlap_1}, {integral_overlap_2}')
 
         return integral_overlap_1, integral_overlap_2
 
