@@ -305,11 +305,9 @@ class UmbrellaSampling:
         :param kwargs: {fs, ps, ns} Simulation time in some units
         """
 
-        self.final_value = final_value
-
         assert pulling_rate is not None
-        if pulling_rate < 0:
-            self.pulling_simulation = False
+
+        self.final_value = final_value
 
         self.pulling_rate = pulling_rate
 
@@ -346,17 +344,30 @@ class UmbrellaSampling:
                                        pulling_rate=pulling_rate,
                                        save_forces=True,
                                        **kwargs)
+        else:
+            logger.error("Method must be 'dftb' or 'gap'")
 
         traj.save('pulling_traj.xyz')
 
         return traj
 
-    def _get_window_frames(self, traj):
+    def _get_window_frames(self, traj, init_ref_val, final_ref_val):
         """Returns the set of frames to use in the umbrella sampling windows"""
 
-        init_ref_value = self.reference
-        distance_range = self.final_value - init_ref_value
-        distance_intervals = distance_range / (self.num_windows - 1)
+        if init_ref_val is None:
+            init_ref_value = self.reference
+        else:
+            init_ref_value = init_ref_val
+
+        if final_ref_val is None:
+            final_ref_value = self.final_value
+        else:
+            final_ref_value = final_ref_val
+
+        distance_list = np.linspace(init_ref_value, final_ref_value,
+                                    self.num_windows)
+
+        logger.info(f'Distance list: {distance_list}')
 
         # Get a dictonary of reaction coordinate distances for each frame
         traj_dists = {}
@@ -373,20 +384,21 @@ class UmbrellaSampling:
 
         # Get the initial configurations used in the umbrella sampling windows
         umbrella_frames = Data()
-        for _ in range(self.num_windows):
+        for ref_distance in distance_list:
             window_dists = deepcopy(traj_dists)
 
             for frame_key, dist_value in window_dists.items():
-                window_dists[frame_key] = abs(dist_value - init_ref_value)
+                window_dists[frame_key] = abs(dist_value - ref_distance)
 
             traj_index = min(window_dists.keys(), key=window_dists.get)
             umbrella_frames.add(traj[traj_index])
 
-            init_ref_value += distance_intervals
+        umbrella_frames.save('umbrella_frames.xyz')
 
-        return umbrella_frames
+        return umbrella_frames, distance_list
 
-    def _run_individual_window(self, frame, temp, interval, dt, **kwargs):
+    def _run_individual_window(self, frame, temp, interval, dt, reference=None,
+                               **kwargs):
         """Runs an individual umbrella sampling window"""
 
         # Change frame.config name
@@ -398,7 +410,11 @@ class UmbrellaSampling:
                                                      mic=True)
                            for i in range(num_pairs)]
 
-        self.umbrella_gap.reference = np.mean(euclidean_dists)
+        if reference is None:
+            self.umbrella_gap.reference = np.mean(euclidean_dists)
+        else:
+            self.umbrella_gap.reference = reference
+
         self.umbrella_gap.spring_const = self.spring_const
 
         logger.info(f'Running umbrella sampling window with reference '
@@ -422,7 +438,7 @@ class UmbrellaSampling:
     def run_umbrella_sampling(self, traj, temp, dt, interval, num_windows=10,
                               pulling_rate=None, disc_threshold=None,
                               overlap_threshold=0.05, adjust_sampling=False,
-                              **kwargs):
+                              initial_ref=None, final_ref=None, **kwargs):
         """Run umbrella sampling across n windows. Self-adjusting K and
         reference implemented"""
 
@@ -438,13 +454,20 @@ class UmbrellaSampling:
         self.overlap_threshold = overlap_threshold
         self.num_windows = num_windows
 
+        self.initial_value = initial_ref
+
+        if final_ref is not None:
+            self.final_value = final_ref
+
         gaussian_parms = [None, None]
         overlaps_lower, overlaps_upper, ref_discrep, stan_dev = [], [], [], []
 
         combined_traj = Data()
         combined_coords = []
 
-        umbrella_frames = self._get_window_frames(traj)
+        umbrella_frames, references = self._get_window_frames(traj,
+                                                              initial_ref,
+                                                              final_ref)
         inital_spring = self.spring_const
 
         for window_index, frame in enumerate(umbrella_frames):
@@ -452,13 +475,16 @@ class UmbrellaSampling:
             self.previous_ref = self.umbrella_gap.reference
 
             win_traj = self._run_individual_window(frame, temp, interval, dt,
+                                                   reference=
+                                                   references[window_index],
                                                    **kwargs)
-            logger.info(f'Current reference: {self.umbrella_gap.reference:.2f}')
+
             combined_traj += win_traj
 
             with open(f'window_{self.window_count}.txt', 'w') as outfile:
                 print(f'# {self.umbrella_gap.reference} {self.spring_const} '
                       f'{self.window_count}', file=outfile)
+
                 for frame_num, configuration in enumerate(win_traj):
                     print(f'{frame_num}',
                           f'{configuration.rxn_coord}',
@@ -485,10 +511,10 @@ class UmbrellaSampling:
                     gaussian_parms[0][1] - self.umbrella_gap.reference)
 
                 if adjust_sampling:
-                    traj = self._modify_window_parms(discrepency, min(overlaps),
-                                                     frame, gaussian_parms,
-                                                     temp, interval, dt, **kwargs)
-                    self.window_count += 1
+                    traj = self._modify_window_parms(discrepency,
+                                                     min(overlaps), frame,
+                                                     gaussian_parms, temp,
+                                                     interval, dt, **kwargs)
 
                     combined_traj += traj
 
@@ -505,6 +531,7 @@ class UmbrellaSampling:
 
                     win_data = [coord.rxn_coord for coord in traj]
                     combined_coords.append(win_data)
+                    self.window_count += 1
 
                 else:
                     logger.info(f'Overlap ({min(overlaps):.2f}) and '
@@ -654,13 +681,8 @@ class UmbrellaSampling:
 
         self.correlation = correlation
 
-        if self.pulling_simulation:
-            hist_min = self.reference
-            hist_max = self.final_value
-
-        else:
-            hist_max = self.reference
-            hist_min = self.final_value
+        hist_min = self.initial_value
+        hist_max = self.final_value
 
         metadatafile = 'metadata.txt'
         freefile = 'free_energy.txt'
@@ -771,16 +793,24 @@ class UmbrellaSampling:
             if len(set(flat_list)) != len(flat_list):
                 raise ValueError("All atom indexes in pairs must be unique")
 
-            _atoms = init_config.ase_atoms()
+            self.initial_value = None
+            self.final_value = None
 
-            num_pairs = len(coordinate)
-            euclidean_dists = [_atoms.get_distance(coordinate[i][0],
-                                                   coordinate[i][1],
-                                                   mic=True)
-                               for i in range(num_pairs)]
+            if self.initial_value is None:
 
-            self.reference = (1 / num_pairs) * np.sum(euclidean_dists)
-            logger.info(f'Initial value of reference: {self.reference:.2f}')
+                _atoms = init_config.ase_atoms()
+
+                num_pairs = len(coordinate)
+                euclidean_dists = [_atoms.get_distance(coordinate[i][0],
+                                                       coordinate[i][1],
+                                                       mic=True)
+                                   for i in range(num_pairs)]
+
+                self.reference = (1 / num_pairs) * np.sum(euclidean_dists)
+            else:
+                self.reference = self.initial_value
+
+            logger.info(f'Initial value of reference: {self.reference}')
 
         elif len(coordinate) == 4:
             self.coord_type = 'torsion'
@@ -822,10 +852,8 @@ class UmbrellaSampling:
             raise ValueError("Method must be in ['dftb', 'gap]")
 
         self.coordinate = coordinate
-        self.final_value = None
         self.pulling_rate = None
         self.previous_ref = None
-        self.pulling_simulation = True
         self.disc_threshold = None
         self.overlap_threshold = 0.05
         self.num_windows = None
