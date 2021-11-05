@@ -382,6 +382,9 @@ class UmbrellaSampling:
             avg_distance = (1 / num_pairs) * np.sum(euclidean_dists)
             traj_dists[index] = avg_distance
 
+        self.min_traj_ref = min(traj_dists.values())
+        self.max_traj_ref = max(traj_dists.values())
+
         # Get the initial configurations used in the umbrella sampling windows
         umbrella_frames = Data()
         for ref_distance in distance_list:
@@ -392,8 +395,6 @@ class UmbrellaSampling:
 
             traj_index = min(window_dists.keys(), key=window_dists.get)
             umbrella_frames.add(traj[traj_index])
-
-        umbrella_frames.save('umbrella_frames.xyz')
 
         return umbrella_frames, distance_list
 
@@ -410,16 +411,33 @@ class UmbrellaSampling:
                                                      mic=True)
                            for i in range(num_pairs)]
 
+        if reference > self.max_traj_ref:
+
+            self.umbrella_gap.spring_const = self.spring_const * np.exp(
+                -(self.max_traj_ref - reference)**2)
+
+            logger.info(f'Reducing K as reference {reference:.2f} is greater '
+                        f'than maximum reference {self.max_traj_ref:.2f}')
+
+        elif reference < self.min_traj_ref:
+
+            self.umbrella_gap.spring_const = self.spring_const * np.exp(
+                -(self.min_traj_ref - reference) ** 2)
+
+            logger.info(f'Reducing K as reference {reference:.2f} is less '
+                        f'than minimum reference {self.min_traj_ref:.2f}')
+
+        else:
+            self.umbrella_gap.spring_const = self.spring_const
+
         if reference is None:
             self.umbrella_gap.reference = np.mean(euclidean_dists)
         else:
             self.umbrella_gap.reference = reference
 
-        self.umbrella_gap.spring_const = self.spring_const
-
         logger.info(f'Running umbrella sampling window with reference '
                     f'{self.umbrella_gap.reference:.2f} and spring constant '
-                    f'{self.spring_const}')
+                    f'{self.umbrella_gap.spring_const:.2f}')
 
         traj = run_umbrella_gapmd(configuration=frame,
                                   umbrella_gap=self.umbrella_gap,
@@ -514,7 +532,9 @@ class UmbrellaSampling:
                     traj = self._modify_window_parms(discrepency,
                                                      min(overlaps), frame,
                                                      gaussian_parms, temp,
-                                                     interval, dt, **kwargs)
+                                                     interval, dt,
+                                                     reference=references[window_index],
+                                                     **kwargs)
 
                     if traj is not None:
 
@@ -550,7 +570,7 @@ class UmbrellaSampling:
         return None
 
     def _modify_window_parms(self, disc, overlap, frame, gaussian_parms, temp,
-                             interval, dt, **kwargs):
+                             interval, dt, reference, **kwargs):
 
         max_iters = 1
         iters = 1
@@ -563,7 +583,9 @@ class UmbrellaSampling:
                 self.spring_const *= 1
 
                 win_traj = self._run_individual_window(frame, temp, interval,
-                                                       dt, **kwargs)
+                                                       dt, reference=
+                                                       reference,
+                                                       **kwargs)
                 win_data = [coord.rxn_coord for coord in win_traj]
                 # Maybe add these trajectories to combined trajectories
 
@@ -602,7 +624,9 @@ class UmbrellaSampling:
                 self.umbrella_gap.reference = ref_diff * 1 + self.previous_ref
 
                 win_traj = self._run_individual_window(frame, temp, interval,
-                                                       dt, **kwargs)
+                                                       dt, reference=
+                                                       reference,
+                                                       **kwargs)
                 win_data = [coord.rxn_coord for coord in win_traj]
 
                 gaussian_parms[1] = self._fit_gaussian(win_data)
@@ -627,7 +651,9 @@ class UmbrellaSampling:
                 self.spring_const *= 1
 
                 win_traj = self._run_individual_window(frame, temp, interval,
-                                                       dt, **kwargs)
+                                                       dt, reference=
+                                                       reference,
+                                                       **kwargs)
                 win_data = [coord.rxn_coord for coord in win_traj]
                 # Maybe add these trajectories to combined trajectories
 
@@ -648,9 +674,10 @@ class UmbrellaSampling:
                         self.umbrella_gap.reference - self.previous_ref)
                     self.umbrella_gap.reference = ref_diff * 1 + self.previous_ref
 
-                    win_traj = self._run_individual_window(frame, temp,
-                                                           interval, dt,
-                                                           **kwargs)
+                    win_traj = self._run_individual_window(frame, temp, interval,
+                                                       dt, reference=
+                                                       reference,
+                                                       **kwargs)
                     win_data = [coord.rxn_coord for coord in win_traj]
 
                     gaussian_parms[1] = self._fit_gaussian(win_data)
@@ -864,6 +891,8 @@ class UmbrellaSampling:
         self.window_count = 0
         self.max_k_iters = max_k_iters
         self.overlap_threshold = overlap_threshold
+        self.min_traj_ref = None
+        self.max_traj_ref = None
 
 
 class Overlap:
