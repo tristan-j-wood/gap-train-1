@@ -364,10 +364,10 @@ class UmbrellaSampling:
         else:
             final_ref_value = final_ref_val
 
+        assert final_ref_value is not None
+
         distance_list = np.linspace(init_ref_value, final_ref_value,
                                     self.num_windows)
-
-        logger.info(f'Distance list: {distance_list}')
 
         # Get a dictonary of reaction coordinate distances for each frame
         traj_dists = {}
@@ -516,22 +516,24 @@ class UmbrellaSampling:
                                                      gaussian_parms, temp,
                                                      interval, dt, **kwargs)
 
-                    combined_traj += traj
+                    if traj is not None:
 
-                    with open(f'window_{self.window_count}.txt',
-                              'w') as outfile:
-                        print(f'# {self.umbrella_gap.reference} '
-                              f'{self.spring_const}', file=outfile)
+                        combined_traj += traj
 
-                        for frame_num, configuration in enumerate(
-                                traj):
-                            print(f'{frame_num}',
-                                  f'{configuration.rxn_coord}',
-                                  f'{configuration.energy}', file=outfile)
+                        with open(f'window_{self.window_count}.txt',
+                                  'w') as outfile:
+                            print(f'# {self.umbrella_gap.reference} '
+                                  f'{self.spring_const}', file=outfile)
 
-                    win_data = [coord.rxn_coord for coord in traj]
-                    combined_coords.append(win_data)
-                    self.window_count += 1
+                            for frame_num, configuration in enumerate(
+                                    traj):
+                                print(f'{frame_num}',
+                                      f'{configuration.rxn_coord}',
+                                      f'{configuration.energy}', file=outfile)
+
+                        win_data = [coord.rxn_coord for coord in traj]
+                        combined_coords.append(win_data)
+                        self.window_count += 1
 
                 else:
                     logger.info(f'Overlap ({min(overlaps):.2f}) and '
