@@ -413,7 +413,7 @@ class UmbrellaSampling:
 
         if reference > self.max_traj_ref:
 
-            self.umbrella_gap.spring_const = self.spring_const * np.exp(
+            self.umbrella_gap.spring_const = 0.5 * self.spring_const * np.exp(
                 -(self.max_traj_ref - reference)**2)
 
             logger.info(f'Reducing K as reference {reference:.2f} is greater '
@@ -421,7 +421,7 @@ class UmbrellaSampling:
 
         elif reference < self.min_traj_ref:
 
-            self.umbrella_gap.spring_const = self.spring_const * np.exp(
+            self.umbrella_gap.spring_const = 0.5 * self.spring_const * np.exp(
                 -(self.min_traj_ref - reference) ** 2)
 
             logger.info(f'Reducing K as reference {reference:.2f} is less '
@@ -435,7 +435,7 @@ class UmbrellaSampling:
         else:
             self.umbrella_gap.reference = reference
 
-        logger.info(f'Running umbrella sampling window with reference '
+        logger.info(f'Running US window with reference '
                     f'{self.umbrella_gap.reference:.2f} and spring constant '
                     f'{self.umbrella_gap.spring_const:.2f}')
 
@@ -480,6 +480,10 @@ class UmbrellaSampling:
         gaussian_parms = [None, None]
         overlaps_lower, overlaps_upper, ref_discrep, stan_dev = [], [], [], []
 
+        # Development
+        overlap_list = []
+        mean_gaussian = []
+
         combined_traj = Data()
         combined_coords = []
 
@@ -500,7 +504,8 @@ class UmbrellaSampling:
             combined_traj += win_traj
 
             with open(f'window_{self.window_count}.txt', 'w') as outfile:
-                print(f'# {self.umbrella_gap.reference} {self.spring_const} '
+                print(f'# {self.umbrella_gap.reference} '
+                      f'{self.umbrella_gap.spring_const} '
                       f'{self.window_count}', file=outfile)
 
                 for frame_num, configuration in enumerate(win_traj):
@@ -543,7 +548,8 @@ class UmbrellaSampling:
                         with open(f'window_{self.window_count}.txt',
                                   'w') as outfile:
                             print(f'# {self.umbrella_gap.reference} '
-                                  f'{self.spring_const}', file=outfile)
+                                  f'{self.umbrella_gap.spring_const}',
+                                  file=outfile)
 
                             for frame_num, configuration in enumerate(
                                     traj):
@@ -560,10 +566,28 @@ class UmbrellaSampling:
                                 f'discrepency ({discrepency:.2f}) below '
                                 f'thresholds')
 
+                overlaps_lower.append(min(overlaps))
+                overlaps_upper.append(max(overlaps))
+
+                # Development
+                overlap_list.append(overlaps[1])
+                mean_gaussian.append(gaussian_parms[0][1])
+                overlap_list.append(overlaps[0])
+                mean_gaussian.append(gaussian_parms[1][1])
+
                 gaussian_parms[0] = gaussian_parms[1]
 
             self.spring_const = inital_spring
             # Need to add in overlap data for graphs etc
+
+        with open(f'overlap_data.txt', 'w') as outfile:
+            for min_o, max_o in zip(overlaps_lower, overlaps_upper):
+                print(f'{min_o} {max_o}', file=outfile)
+
+        # Development
+        with open(f'mean+overlap_data.txt', 'w') as outfile:
+            for overlap, mean in zip(overlap_list, mean_gaussian):
+                print(f'{overlap} {mean}', file=outfile)
 
         combined_traj.save(filename='combined_windows.xyz')
 
@@ -571,6 +595,7 @@ class UmbrellaSampling:
 
     def _modify_window_parms(self, disc, overlap, frame, gaussian_parms, temp,
                              interval, dt, reference, **kwargs):
+        """Method still in development"""
 
         max_iters = 1
         iters = 1
@@ -699,7 +724,7 @@ class UmbrellaSampling:
         else:
             return None
 
-    def run_wham_analysis(self, temp, num_bins=30, tol=0.00001, numpad=0,
+    def run_wham_analysis(self, temp, num_bins=50, tol=0.00001, numpad=0,
                           wham_path=None, num_MC_trials=0, randSeed=1,
                           correlation=10):
         """Calculates the Gibbs free energy using the WHAM method"""
@@ -721,8 +746,8 @@ class UmbrellaSampling:
         logger.warning('Ensure that the units in the Grossman WHAM '
                        'implementation are in eV')
 
-        os.system(f'{wham_path} {hist_min} {hist_max} {num_bins} {tol} '
-                  f'{temp} {numpad} {metadatafile} {freefile} '
+        os.system(f'{wham_path} {hist_min} {hist_max} {num_bins} '
+                  f'{tol} {temp} {numpad} {metadatafile} {freefile} '
                   f'{num_MC_trials} {randSeed}')
 
         return None
@@ -1002,7 +1027,8 @@ class Overlap:
 
                 else:
                     logger.error(
-                        "Could not assign functions to calculate overlap")
+                        "Could not assign functions to calculate overlap. "
+                        f"Parameters: A ({parms_a}), B ({norm_func})")
 
             elif intercepts[0] < b < intercepts[1]:
                 func_1_parms = parms_a
